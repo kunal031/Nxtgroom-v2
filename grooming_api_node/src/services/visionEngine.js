@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { runtimeConfig } from "../config/env.js";
 import { incrementMetric, observeDuration } from "./telemetry.js";
-import { buildFemaleSystemPrompt, buildSystemPrompt } from "../prompts.js";
+import { buildFemaleAttirePrompt, buildSystemPrompt } from "../prompts.js";
 import { checkpointSet, INFORMATIONAL_CODES, SECTION_KEYS } from "../checkpoints.js";
 
 const GEMINI_API_ORIGIN = "https://generativelanguage.googleapis.com";
@@ -14,6 +14,9 @@ const FEMALE_ATTIRE_TYPES = ["SAREE", "KURTI_WITH_DUPATTA", "FORMAL", "UNKNOWN"]
 // fine local detail, and at a smaller budget both were passed on a general
 // impression of the face rather than on those edges.
 const DEFAULT_THINKING_BUDGET = 4096;
+// The female classification step answers one multiple-choice question about
+// the garment, so it does not need the budget a twenty-checkpoint report does.
+const CLASSIFICATION_THINKING_BUDGET = 1024;
 const CACHE_RENEWAL_SAFETY_SECONDS = 300;
 const CACHE_FAILURE_BACKOFF_MS = 60_000;
 // The registry is process-local, so every replica retries a failing cache on
@@ -259,7 +262,14 @@ function invalidateGeminiPromptCache(cacheReference) {
   geminiCacheRegistry.delete(cacheReference.registryKey);
 }
 
-function buildGeminiRequestBody({ systemInstruction, input, jsonSchema, maxOutputTokens, cacheName }) {
+function buildGeminiRequestBody({
+  systemInstruction,
+  input,
+  jsonSchema,
+  maxOutputTokens,
+  cacheName,
+  thinkingBudget = DEFAULT_THINKING_BUDGET,
+}) {
   return {
     ...(cacheName
       ? { cachedContent: cacheName }
@@ -280,7 +290,7 @@ function buildGeminiRequestBody({ systemInstruction, input, jsonSchema, maxOutpu
       // contradicted the image: a visible beard scored PASS, hair across the
       // forehead scored PASS, and lower-body checkpoints were asserted from a
       // face-only photograph. Give it room to inspect before it answers.
-      thinkingConfig: { thinkingBudget: DEFAULT_THINKING_BUDGET },
+      thinkingConfig: { thinkingBudget },
       mediaResolution: "MEDIA_RESOLUTION_HIGH",
     },
   };
@@ -293,6 +303,7 @@ async function requestGeminiStructured({
   jsonSchema,
   validator,
   maxOutputTokens,
+  thinkingBudget,
   limits,
 }) {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -316,6 +327,7 @@ async function requestGeminiStructured({
     input,
     jsonSchema,
     maxOutputTokens,
+    thinkingBudget,
     cacheName: cacheReference?.name,
   });
 
@@ -370,6 +382,7 @@ async function requestGeminiStructured({
           input,
           jsonSchema,
           maxOutputTokens,
+          thinkingBudget,
           cacheName: null,
         });
         incrementMetric("gemini_explicit_cache_fallbacks_total");
@@ -449,6 +462,11 @@ function buildReportSchema(sections, { attireType = null } = {}) {
   };
   if (attireType) shape.attire_type = z.literal(attireType);
   for (const key of SECTION_KEYS) {
+    // A family with no rows in a section is omitted rather than asked for as
+    // an empty object. UNKNOWN attire has no attire_check, and toOrderedRows
+    // reads the checkpoint table rather than the response, so nothing looks
+    // for a key that was never requested.
+    if (!sections[key].length) continue;
     shape[key] = z.object(
       Object.fromEntries(sections[key].map((item) => [item.code, Entry]))
     );
@@ -471,7 +489,8 @@ function buildReportJsonSchema(sections, { attireType = null } = {}) {
     },
   };
   if (attireType) properties.attire_type = { type: "string", enum: [attireType] };
-  for (const key of SECTION_KEYS) {
+  const populatedKeys = SECTION_KEYS.filter((key) => sections[key].length);
+  for (const key of populatedKeys) {
     properties[key] = {
       type: "object",
       additionalProperties: false,
@@ -489,37 +508,56 @@ function buildReportJsonSchema(sections, { attireType = null } = {}) {
       "ai_summary",
       "visible_regions",
       ...(attireType ? ["attire_type"] : []),
-      ...SECTION_KEYS,
+      ...populatedKeys,
     ],
   };
 }
 
 /**
- * A strict nested union lets one response choose one female attire family
- * without returning the unused families' checkpoint rows. Structured Outputs
- * permits anyOf below the root object, so the outer evaluation key keeps the
- * schema valid while each branch remains exact and independently validated.
+ * The classification step's response: which garment, and what the photograph
+ * shows. No checkpoints, so the schema stays small.
+ *
+ * This replaced a union of all four attire families. Gemini turns a response
+ * schema into a constrained-decoding state machine, and that union needed
+ * every row of every branch present at once — 71 properties where a man's
+ * report needs 20. The provider rejected it with a deterministic 400, "the
+ * specified schema produces a constraint that has too many states for
+ * serving", which retries could not clear, so every female evaluation failed.
  */
-function buildFemaleResponseSchema() {
+function buildFemaleAttireSchema() {
   return z.object({
-    evaluation: z.union(FEMALE_ATTIRE_TYPES.map((attireType) => (
-      buildReportSchema(checkpointSet("FEMALE", attireType), { attireType })
-    ))),
+    subject_visible: z.boolean(),
+    attire_type: z.enum(FEMALE_ATTIRE_TYPES),
+    image_quality: z.enum(["ADEQUATE", "RETAKE_RECOMMENDED"]),
+    visible_regions: z.object({
+      face: VISIBILITY,
+      upper_body: VISIBILITY,
+      lower_body: VISIBILITY,
+      footwear: VISIBILITY,
+      id_card: VISIBILITY,
+      hands: VISIBILITY,
+    }),
   });
 }
 
-function buildFemaleResponseJsonSchema() {
+function buildFemaleAttireJsonSchema() {
   return {
     type: "object",
     additionalProperties: false,
     properties: {
-      evaluation: {
-        anyOf: FEMALE_ATTIRE_TYPES.map((attireType) => (
-          buildReportJsonSchema(checkpointSet("FEMALE", attireType), { attireType })
-        )),
+      subject_visible: { type: "boolean" },
+      attire_type: { type: "string", enum: [...FEMALE_ATTIRE_TYPES] },
+      image_quality: { type: "string", enum: ["ADEQUATE", "RETAKE_RECOMMENDED"] },
+      visible_regions: {
+        type: "object",
+        additionalProperties: false,
+        properties: Object.fromEntries([
+          "face", "upper_body", "lower_body", "footwear", "id_card", "hands",
+        ].map((key) => [key, { type: "string", enum: ["VISIBLE", "PARTIAL", "NOT_VISIBLE"] }])),
+        required: ["face", "upper_body", "lower_body", "footwear", "id_card", "hands"],
       },
     },
-    required: ["evaluation"],
+    required: ["subject_visible", "attire_type", "image_quality", "visible_regions"],
   };
 }
 
@@ -768,20 +806,53 @@ export async function evaluateImage(imageBuffer, mimeType, gender = null, limits
   let attireType = "FORMAL";
   let parsed;
   if (normalizedGender === "FEMALE") {
-    const response = await requestGeminiStructured({
-      systemInstruction: buildFemaleSystemPrompt(),
-      cacheNamespace: "female",
+    // Which garment, asked on its own. Folding this into the report request
+    // meant offering all four attire families in one schema, which Gemini now
+    // rejects outright as too many states to serve, so nothing about a woman
+    // could be evaluated. See buildFemaleAttirePrompt.
+    const classification = await requestGeminiStructured({
+      systemInstruction: buildFemaleAttirePrompt(),
+      cacheNamespace: "female-attire",
       input: content,
-      jsonSchema: buildFemaleResponseJsonSchema(),
-      validator: buildFemaleResponseSchema(),
+      jsonSchema: buildFemaleAttireJsonSchema(),
+      validator: buildFemaleAttireSchema(),
+      maxOutputTokens: 512 + CLASSIFICATION_THINKING_BUDGET,
+      thinkingBudget: CLASSIFICATION_THINKING_BUDGET,
+      limits,
+    });
+    attireType = classification.attire_type;
+
+    // Both of these end the evaluation, so the checkpoint request is never
+    // made. A photograph with nobody in it, or one that cannot show what is
+    // being worn, now costs one call rather than the two it would have taken
+    // to reach the same answer.
+    if (classification.subject_visible === false) {
+      incrementMetric("evaluations_unassessed_total");
+      return unassessedEvaluation(
+        "NO_PERSON_VISIBLE",
+        "The photograph does not show the instructor, so no appearance assessment could be made. Retake it as a clear, full-length photo of the person checking in.",
+        { imageQuality: "RETAKE_RECOMMENDED" }
+      );
+    }
+    // UNKNOWN attire is not short-circuited. Its checkpoint set still carries
+    // the ID card, grooming, accessories and footwear rows, which do not
+    // depend on the garment and were reported before this split; only the
+    // attire section is empty. The verdict below stays UNASSESSED regardless.
+
+    // One family's rows, through the same flat schema the men's path uses.
+    const femaleSections = checkpointSet("FEMALE", attireType);
+    parsed = await requestGeminiStructured({
+      systemInstruction: buildSystemPrompt("FEMALE", attireType),
+      cacheNamespace: `female-${attireType.toLowerCase()}`,
+      input: content,
+      jsonSchema: buildReportJsonSchema(femaleSections),
+      validator: buildReportSchema(femaleSections),
       // Covers the JSON report plus the thinking budget, which Gemini counts
       // against the same ceiling: at 6000 a full checkpoint set could stop on
       // MAX_TOKENS once thinking was enabled.
       maxOutputTokens: 6000 + DEFAULT_THINKING_BUDGET,
       limits,
     });
-    parsed = response.evaluation;
-    attireType = parsed.attire_type;
   } else {
     const maleSections = checkpointSet("MALE", attireType);
     parsed = await requestGeminiStructured({
@@ -816,6 +887,8 @@ export async function evaluateImage(imageBuffer, mimeType, gender = null, limits
   if (normalizedGender === "MALE") {
     resolveMaleAttireVisibility(rows, parsed.visible_regions);
   }
+  // An unidentified garment cannot be scored against a dress code, however
+  // many of the garment-independent rows came back.
   const verdict = attireType === "UNKNOWN"
     ? { overall_status: "UNASSESSED", image_quality: "RETAKE_RECOMMENDED" }
     : deriveVerdict(rows, { imageQuality: parsed.image_quality });

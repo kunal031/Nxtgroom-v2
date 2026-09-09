@@ -16,8 +16,11 @@ import { checkpointSet, SECTION_KEYS } from "./checkpoints.js";
 // 2026-08-24.2 makes facial-detail assessment explicit and prevents shirt
 // tuck evidence from being misfiled as a shirt-fit violation. 2026-08-24.3
 // classifies a woman's attire and evaluates its matching checkpoints in the
-// same response, removing the duplicate image-analysis request.
-export const PROMPT_VERSION = "2026-08-24.3";
+// same response, removing the duplicate image-analysis request. 2026-09-09.1
+// splits that single response back into a classification step and a report
+// step: Gemini began rejecting the combined schema outright, so no woman's
+// check-in could be evaluated at all (see buildFemaleAttirePrompt).
+export const PROMPT_VERSION = "2026-09-09.1";
 
 const SECTION_TITLES = {
   general_idcard_check: "GENERAL ID CARD CHECK",
@@ -281,35 +284,40 @@ ${rendered}`,
 }
 
 /**
- * Classifies and evaluates a woman's visible attire in one model response.
+ * Reads which garment family a woman is wearing, and nothing else.
  *
- * The garment must be read from the photograph rather than
- * assumed from her gender — a woman in formal trousers is a real case the
- * weekly rotation needs to see. The strict response branch then returns only
- * the checkpoints that apply to the selected garment.
+ * This used to be folded into the report request: one call returned the
+ * classification and the matching checkpoints together, expressed as a schema
+ * that offered all four attire families as a union. Gemini compiles a
+ * response schema into a constrained-decoding state machine, and that union
+ * required every row of every branch — 71 properties against the 20 a man's
+ * report needs. The provider began refusing it outright with "the specified
+ * schema produces a constraint that has too many states for serving", a
+ * deterministic 400 that no retry could clear, so every female check-in
+ * failed and no woman could be assessed at all.
+ *
+ * Asking the garment first costs a second request, which is exactly what
+ * 2026-08-24.3 removed. That saving is not available: one call that is always
+ * rejected is worth less than two that work. The report step then asks for a
+ * single family's rows through the same flat schema the men's path has always
+ * used, so neither request carries a union.
+ *
+ * The garment must be read from the photograph rather than assumed from her
+ * gender — a woman in formal trousers is a real case the weekly rotation
+ * needs to see.
  */
-export function buildFemaleSystemPrompt() {
-  const attireTypes = ["SAREE", "KURTI_WITH_DUPATTA", "FORMAL", "UNKNOWN"];
-  const commonSections = checkpointSet("FEMALE", "UNKNOWN");
-  const commonKeys = SECTION_KEYS.filter((key) => key !== "attire_check");
-  const commonCount = commonKeys.reduce((sum, key) => sum + commonSections[key].length, 0);
-  const commonRendered = commonKeys
-    .map((key) => renderSection(key, commonSections[key]))
-    .join("\n\n");
-  const attireRendered = attireTypes.map((attireType) => {
-    const items = checkpointSet("FEMALE", attireType).attire_check;
-    if (attireType === "UNKNOWN") {
-      return `## UNKNOWN ATTIRE\nReturn attire_type as UNKNOWN and return an empty "attire_check" object.`;
-    }
-    return `## WHEN attire_type IS ${attireType}\n${renderSection("attire_check", items)}`;
-  }).join("\n\n");
-
+export function buildFemaleAttirePrompt() {
   return [
     COMMON_ANALYSIS_RULES,
     WOMEN_ANALYSIS_RULES,
-    `### IDENTIFY THE VISIBLE ATTIRE FAMILY
-Choose exactly one attire_type from the photograph before applying attire
-checkpoints:
+    `### YOUR ONLY TASK IN THIS REQUEST
+Do not assess compliance here and do not return any checkpoint. Report only
+whether the photograph shows the person, which parts of the body it shows,
+and which attire family she is wearing. The checkpoints are asked for
+separately once the family is known.
+
+### IDENTIFY THE VISIBLE ATTIRE FAMILY
+Choose exactly one attire_type from the photograph:
 
 - SAREE: a saree is being worn.
 - KURTI_WITH_DUPATTA: a kurti is being worn, with or without a dupatta. A
@@ -322,19 +330,6 @@ checkpoints:
   its applicable standard.
 
 Identify clothing only from visible evidence. Do not infer it from the person's
-gender. Then return the report branch whose checkpoints match attire_type.
-Never return checkpoints from another attire family.`,
-    `### COMMON CHECKPOINTS
-Return every common checkpoint below and no others: ${commonCount} in total,
-each exactly once, in the order and section named. Copy each code and
-checkpoint_name character for character.
-
-${commonRendered}
-
-### ATTIRE CHECKPOINT BRANCH
-Return exactly one of the following attire branches. The chosen branch must
-match attire_type. Do not merge branches or return unused attire checkpoints.
-
-${attireRendered}`,
+gender.`,
   ].join("\n\n");
 }

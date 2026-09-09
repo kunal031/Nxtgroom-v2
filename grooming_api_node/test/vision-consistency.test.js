@@ -237,7 +237,7 @@ test("vision evaluation sends only the instructor image and structured output to
   }
 });
 
-test("female attire classification and its matching report use one image request", async () => {
+test("female attire is classified first, then reported against that family alone", async () => {
   const originalFetch = globalThis.fetch;
   const originalGemini = {
     apiKey: process.env.GEMINI_API_KEY,
@@ -270,30 +270,39 @@ test("female attire classification and its matching report use one image request
     }]));
   }
 
+  const classification = {
+    subject_visible: true,
+    attire_type: "SAREE",
+    image_quality: "ADEQUATE",
+    visible_regions: report.visible_regions,
+  };
+
   let requestCount = 0;
-  let captured;
   process.env.GEMINI_API_KEY = "test-only-gemini-key";
   process.env.GEMINI_MODEL = "gemini-2.5-flash-lite";
   process.env.GEMINI_TIMEOUT_MS = "120000";
   process.env.GEMINI_MAX_RETRIES = "0";
   process.env.GEMINI_EXPLICIT_CACHE = "true";
   process.env.GEMINI_CACHE_TTL_SECONDS = "3600";
-  let imageRequestCount = 0;
-  let cacheRequest;
+  const imageRequests = [];
+  const cacheRequests = [];
   globalThis.fetch = async (url, options) => {
     requestCount += 1;
     if (url.endsWith("/v1beta/cachedContents")) {
-      cacheRequest = { url, options, body: JSON.parse(options.body) };
-      return new Response(JSON.stringify({ name: "cachedContents/nxtgroom-female-test" }), {
+      const body = JSON.parse(options.body);
+      cacheRequests.push({ url, options, body });
+      return new Response(JSON.stringify({ name: `cachedContents/${body.displayName}` }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
     }
-    imageRequestCount += 1;
-    captured = { url, options, body: JSON.parse(options.body) };
+    const body = JSON.parse(options.body);
+    imageRequests.push({ url, options, body });
+    // The first image call is the classification, the second the report.
+    const payload = imageRequests.length === 1 ? classification : report;
     return new Response(JSON.stringify({
       candidates: [{
-        content: { role: "model", parts: [{ text: JSON.stringify({ evaluation: report }) }] },
+        content: { role: "model", parts: [{ text: JSON.stringify(payload) }] },
         finishReason: "STOP",
       }],
       usageMetadata: {
@@ -309,8 +318,8 @@ test("female attire classification and its matching report use one image request
     const { evaluateImage } = await import("../src/services/visionEngine.js");
     const result = await evaluateImage(Buffer.from([0xff, 0xd8, 0xff, 0xe0]), "image/jpeg", "FEMALE");
 
-    assert.equal(requestCount, 2, "one cache creation and one image analysis request are expected");
-    assert.equal(imageRequestCount, 1, "the female image must not be sent to a separate classifier");
+    assert.equal(imageRequests.length, 2, "a classification request then a report request");
+    assert.equal(requestCount, 4, "each step creates its own prompt cache");
     assert.equal(result.overall_status, "COMPLIANT");
     assert.equal(result.attire_type, "SAREE");
     assert.deepEqual(
@@ -318,18 +327,45 @@ test("female attire classification and its matching report use one image request
       sections.attire_check.map((item) => item.code),
       "only the selected saree rows should reach the stored report",
     );
-    assert.equal(captured.body.generationConfig.responseJsonSchema.type, "object");
-    assert.equal(captured.body.generationConfig.responseJsonSchema.properties.evaluation.anyOf.length, 4);
-    assert.match(cacheRequest.body.displayName, /^nxtgroom-female-/);
-    assert.notEqual(
-      captured.body.cachedContent,
-      "cachedContents/nxtgroom-male-test",
-      "female analysis must never use the male prompt cache",
+
+    const [classify, reportCall] = imageRequests.map((request) => (
+      request.body.generationConfig.responseJsonSchema
+    ));
+
+    // The union of all four attire families is what Gemini refused to serve.
+    // Neither request may carry one, or every female check-in fails again.
+    for (const schema of [classify, reportCall]) {
+      assert.equal(schema.type, "object");
+      assert.equal(JSON.stringify(schema).includes("anyOf"), false, "no schema may use a union");
+    }
+    assert.deepEqual(
+      Object.keys(classify.properties).sort(),
+      ["attire_type", "image_quality", "subject_visible", "visible_regions"],
+      "the classification step must not ask for checkpoints",
     );
-    assert.equal(captured.body.cachedContent, "cachedContents/nxtgroom-female-test");
-    const images = captured.body.contents[0].parts.filter((part) => part.inlineData);
-    assert.equal(images.length, 1);
-    assert.equal(images[0].inlineData.data, "/9j/4A==");
+    // Only the saree rows, and none from the families that were not chosen.
+    assert.deepEqual(
+      Object.keys(reportCall.properties.attire_check.properties),
+      sections.attire_check.map((item) => item.code),
+    );
+    for (const code of ["W_KURTI_ATTIRE_TYPE", "W_FORMAL_TOP", "W_DUPATTA"]) {
+      assert.equal(
+        JSON.stringify(reportCall).includes(code),
+        false,
+        `${code} belongs to another attire family`,
+      );
+    }
+
+    // Each step caches its own prompt, and neither may reach for the men's.
+    assert.equal(cacheRequests.length, 2);
+    assert.match(cacheRequests[0].body.displayName, /^nxtgroom-female-attire-/);
+    assert.match(cacheRequests[1].body.displayName, /^nxtgroom-female-saree-/);
+    for (const request of imageRequests) {
+      assert.match(request.body.cachedContent, /^cachedContents\/nxtgroom-female-/);
+      const images = request.body.contents[0].parts.filter((part) => part.inlineData);
+      assert.equal(images.length, 1, "each step is given the photograph once");
+      assert.equal(images[0].inlineData.data, "/9j/4A==");
+    }
   } finally {
     globalThis.fetch = originalFetch;
     for (const [name, value] of Object.entries({

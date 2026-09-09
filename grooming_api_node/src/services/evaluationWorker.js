@@ -45,6 +45,28 @@ function jobKind(job) {
   return job?.kind === "checkout" ? "checkout" : "checkin";
 }
 
+/**
+ * Failures that running the job again cannot clear.
+ *
+ * A 400 means the request itself was refused - a schema the provider will not
+ * serve, or a malformed body - and a 401/403 means the credential is wrong.
+ * Neither answer changes between attempts, so retrying only multiplied the
+ * cost: when Gemini began rejecting the combined female schema, every job
+ * spent its full three attempts arriving at the identical refusal, and each
+ * re-analysis spent three more.
+ *
+ * Everything else, including timeouts, rate limits and provider 5xx, stays on
+ * the normal retry path.
+ */
+const PERMANENT_EVALUATION_ERRORS = new Set([
+  "GEMINI_REQUEST_ERROR",
+  "GEMINI_AUTH_ERROR",
+]);
+
+export function isPermanentEvaluationFailure(error) {
+  return PERMANENT_EVALUATION_ERRORS.has(errorCode(error));
+}
+
 function errorCode(error, fallback = "EVALUATION_ERROR") {
   const value = String(error?.code || error?.name || fallback).toUpperCase();
   return /^[A-Z][A-Z0-9_]{0,79}$/.test(value) ? value : fallback;
@@ -802,7 +824,7 @@ async function retryEvaluation(db, job, error) {
   }
 
   const config = runtimeConfig();
-  if (job.attempts >= config.evaluationMaxAttempts) {
+  if (isPermanentEvaluationFailure(error) || job.attempts >= config.evaluationMaxAttempts) {
     await markEvaluationFailed(db, job, error);
     return;
   }

@@ -11,7 +11,7 @@ import {
   SECTION_KEYS,
   WOMEN_FORMAL_ATTIRE_CHECKS,
 } from "../src/checkpoints.js";
-import { buildFemaleSystemPrompt, buildSystemPrompt, PROMPT_VERSION } from "../src/prompts.js";
+import { buildFemaleAttirePrompt, buildSystemPrompt, PROMPT_VERSION } from "../src/prompts.js";
 import { weeklyRotation } from "../src/services/instructorReports.js";
 import { deriveVerdict, unknownGenderEvaluation } from "../src/services/visionEngine.js";
 
@@ -41,19 +41,50 @@ test("each variant returns its agreed number of checkpoints", () => {
   assert.equal(codesOf("FEMALE", "FORMAL").length, 19);
 });
 
-test("the single-pass female prompt offers each attire family without mixing the stored report", () => {
-  const prompt = buildFemaleSystemPrompt();
+test("the female attire prompt names every family and asks for no checkpoints", () => {
+  const prompt = buildFemaleAttirePrompt();
   for (const marker of ["SAREE", "KURTI_WITH_DUPATTA", "FORMAL", "UNKNOWN"]) {
     assert.match(prompt, new RegExp(`\\b${marker}\\b`));
   }
+  // Carrying the checkpoints here is what made the combined schema too large
+  // for Gemini to serve at all. This step must stay a classification only.
   for (const item of [
     ...SAREE_ATTIRE_CHECKS,
     ...KURTI_ATTIRE_CHECKS,
     ...WOMEN_FORMAL_ATTIRE_CHECKS,
   ]) {
-    assert.match(prompt, new RegExp(`\\b${item.code}\\b`), `${item.code} is missing`);
+    assert.doesNotMatch(
+      prompt,
+      new RegExp(`\\b${item.code}\\b`),
+      `${item.code} must not be asked for in the classification step`
+    );
   }
-  assert.match(prompt, /Do not merge branches or return unused attire checkpoints/i);
+  assert.match(prompt, /do not return any checkpoint/i);
+});
+
+test("each female report prompt carries exactly one attire family", () => {
+  const families = {
+    SAREE: SAREE_ATTIRE_CHECKS,
+    KURTI_WITH_DUPATTA: KURTI_ATTIRE_CHECKS,
+    FORMAL: WOMEN_FORMAL_ATTIRE_CHECKS,
+  };
+  for (const [attire, own] of Object.entries(families)) {
+    const prompt = buildSystemPrompt("FEMALE", attire);
+    for (const item of own) {
+      assert.match(prompt, new RegExp(`\\b${item.code}\\b`), `${attire} is missing ${item.code}`);
+    }
+    const foreign = Object.entries(families)
+      .filter(([name]) => name !== attire)
+      .flatMap(([, items]) => items)
+      .filter((item) => !own.some((mine) => mine.code === item.code));
+    for (const item of foreign) {
+      assert.doesNotMatch(
+        prompt,
+        new RegExp(`\\b${item.code}\\b`),
+        `${attire} must not carry ${item.code}`
+      );
+    }
+  }
 });
 
 test("no checkpoint appears twice in a report", () => {
