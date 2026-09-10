@@ -313,8 +313,20 @@ async function requestGeminiStructured({
   // A caller holding an HTTP connection open cannot wait for the background
   // worker's budget, so it may shorten both the per-attempt timeout and the
   // retry count. Nothing may exceed the configured ceiling.
-  const timeoutMs = Math.min(limits?.timeoutMs ?? config.geminiTimeoutMs, config.geminiTimeoutMs);
+  const ceiling = Math.min(limits?.timeoutMs ?? config.geminiTimeoutMs, config.geminiTimeoutMs);
   const maxRetries = Math.min(limits?.maxRetries ?? config.geminiMaxRetries, config.geminiMaxRetries);
+  // A caller may also cap the whole evaluation rather than each request, which
+  // is what an interactive check-out needs: it makes two calls for a woman and
+  // one for a man, so a per-request budget let the female path reach twice the
+  // worst case the request timeout was sized for. Whatever remains of the
+  // shared deadline bounds this attempt.
+  const remaining = limits?.deadlineAt
+    ? limits.deadlineAt - Date.now()
+    : Number.POSITIVE_INFINITY;
+  if (remaining <= 0) {
+    throw createGeminiError("Gemini evaluation ran out of time", "GEMINI_TIMEOUT", { retryable: false });
+  }
+  const timeoutMs = Math.max(1, Math.min(ceiling, remaining));
   const endpoint = `${GEMINI_API_ORIGIN}/v1beta/models/${encodeURIComponent(config.geminiModel)}:generateContent`;
   let cacheReference = await ensureGeminiPromptCache({
     apiKey,
@@ -788,10 +800,29 @@ export function unknownGenderEvaluation() {
   );
 }
 
+/**
+ * Turns a caller's per-request budget into one deadline for the whole
+ * evaluation.
+ *
+ * The female path makes two model calls, so a limit expressed per request
+ * described twice the worst case the caller was actually willing to wait for.
+ * An interactive check-out holds an HTTP connection that the server destroys
+ * at requestTimeout, and overrunning it shows the instructor a failure while
+ * the analysis carries on server-side and still emails them a report.
+ */
+function sharedDeadline(limits) {
+  if (!limits || limits.deadlineAt) return limits;
+  const config = runtimeConfig();
+  const perAttempt = Math.min(limits.timeoutMs ?? config.geminiTimeoutMs, config.geminiTimeoutMs);
+  const attempts = Math.min(limits.maxRetries ?? config.geminiMaxRetries, config.geminiMaxRetries) + 1;
+  return { ...limits, deadlineAt: Date.now() + perAttempt * attempts };
+}
+
 export async function evaluateImage(imageBuffer, mimeType, gender = null, limits = undefined) {
   if (!Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
     throw new Error("Instructor image is empty or invalid");
   }
+  limits = sharedDeadline(limits);
   const normalizedGender = gender?.toUpperCase();
   if (normalizedGender !== "MALE" && normalizedGender !== "FEMALE") {
     return unknownGenderEvaluation();

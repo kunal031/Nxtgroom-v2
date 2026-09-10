@@ -14,6 +14,37 @@ import { appUrl } from "../config/env.js";
 
 const WORKER_ID = randomUUID();
 const EVALUATION_OUTBOX_FIELD = "_private_evaluation_outbox";
+
+/**
+ * Wakes an idle evaluation worker the moment a job is queued.
+ *
+ * The loop already drains back-to-back while work exists; it waits only when
+ * it finds the queue empty, which is exactly the case after a check-in. That
+ * wait was up to EVALUATION_POLL_MS of dead time between the photograph being
+ * accepted and the analysis starting, for no reason other than the next poll
+ * not having come round yet.
+ *
+ * In-process only, and deliberately best-effort: when the API and the workers
+ * run as separate services (PROCESS_ROLE=api and =worker) there is nobody
+ * listening here, and the polling loop remains the thing that guarantees a
+ * job is picked up. Nothing may depend on this having been delivered.
+ */
+const evaluationWakeups = new Set();
+
+export function onEvaluationQueued(listener) {
+  evaluationWakeups.add(listener);
+  return () => evaluationWakeups.delete(listener);
+}
+
+function notifyEvaluationQueued() {
+  for (const listener of evaluationWakeups) {
+    try {
+      listener();
+    } catch {
+      // A wake-up is an optimisation. The poll still covers this job.
+    }
+  }
+}
 const TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const EVALUATION_DEADLINE_MS = 24 * 60 * 60 * 1000;
 
@@ -244,6 +275,9 @@ export async function enqueueEvaluation(db, payload) {
       $unset: { [EVALUATION_OUTBOX_FIELD]: "" },
     }
   );
+  // Last, so a worker that wakes on this signal finds the job already visible
+  // and the attendance row already pointing at it.
+  notifyEvaluationQueued();
   return jobId;
 }
 
@@ -968,9 +1002,29 @@ export function startEvaluationWorker(db) {
     busyStaleAfterMs: config.evaluationLeaseMs + 60000,
   });
 
+  // Set while the loop is sleeping on an empty queue, so a wake-up knows
+  // there is an idle timer worth cancelling and nothing is in flight.
+  let idle = false;
+
   const schedule = (delay = interval) => {
-    if (!stopped) timer = setTimeout(tick, delay);
+    if (stopped) return;
+    idle = delay > 0;
+    timer = setTimeout(() => {
+      idle = false;
+      tick();
+    }, delay);
   };
+
+  // Only an idle worker is worth waking. One that is mid-cycle will drain the
+  // new job on its next pass without any help, and re-entering tick() here
+  // would run two cycles concurrently.
+  const wake = () => {
+    if (stopped || !idle) return;
+    idle = false;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(tick, 0);
+  };
+  const stopListening = onEvaluationQueued(wake);
   const processJob = async (job) => {
     try {
       if (!(await evaluationTargetExists(db, job))) {
@@ -1043,6 +1097,7 @@ export function startEvaluationWorker(db) {
   return {
     async stop() {
       stopped = true;
+      stopListening();
       if (timer) clearTimeout(timer);
       await inFlight;
       monitor.stop();
