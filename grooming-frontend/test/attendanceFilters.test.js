@@ -95,3 +95,27 @@ test('a half-filled custom range is not queried', () => {
   // All time is complete precisely because it has no bounds.
   assert.equal(isCompleteRange({ from: '', to: '' }, 'all_time'), true);
 });
+
+test('a day nobody closed reads differently from one still running', () => {
+  // Both have no check-out time. Showing a dash for each made a record
+  // abandoned weeks ago look like a session still in progress.
+  const checkIn = '2026-09-11T03:30:00Z';
+  assert.equal(checkoutDateTimeLabel(checkIn, null), '--');
+  assert.equal(checkoutDateTimeLabel(checkIn, null, 'not_checked_out'), 'Not checked out');
+});
+
+test('a real check-out time wins over a leftover mark', () => {
+  // The midnight mark is descriptive, not a lock: a session that ran past
+  // midnight is marked and then closed, and the time is what happened.
+  const checkIn = '2026-09-11T03:30:00Z';
+  const marked = checkoutDateTimeLabel(checkIn, '2026-09-11T12:30:00Z', 'not_checked_out');
+  assert.equal(marked, checkoutDateTimeLabel(checkIn, '2026-09-11T12:30:00Z'));
+  assert.ok(!marked.includes('Not checked out'));
+});
+
+test('callers that know nothing about the status are unaffected', () => {
+  // The argument was added last so every existing call site keeps compiling and
+  // keeps its previous answer.
+  assert.equal(checkoutDateTimeLabel('2026-09-11T03:30:00Z', null), '--');
+  assert.equal(checkoutDateTimeLabel(null, null), '--');
+});

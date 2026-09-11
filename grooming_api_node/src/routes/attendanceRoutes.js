@@ -42,6 +42,11 @@ import {
   identifiedRecordUpdate,
   IDENTIFY_OUTCOMES,
 } from "../services/identifyQueue.js";
+import {
+  CHECKOUT_TIMING,
+  checkoutTiming,
+  describeCheckoutTiming,
+} from "../services/checkoutTiming.js";
 import { attachAddressToAttendance } from "../services/geocoding.js";
 import {
   asyncRoute,
@@ -255,10 +260,22 @@ function openCheckInToday(instructorId, now = new Date()) {
   };
 }
 
-/** Pure decision used before any check-out photo is processed or stored. */
-export function checkoutAvailability(attendance) {
+/**
+ * Pure decision used before any check-out photo is processed or stored.
+ *
+ * `too_early` is checked last, after the states that describe the record rather
+ * than the clock: somebody who never checked in, or already checked out, should
+ * be told that regardless of the time of day.
+ *
+ * `now` is defaulted so existing callers that ask only about the record keep
+ * working, and so the timing boundaries stay testable.
+ */
+export function checkoutAvailability(attendance, now = new Date()) {
   if (!attendance) return "not_checked_in_today";
   if (attendance.check_out_time) return "already_checked_out_today";
+  if (checkoutTiming(attendance.check_in_time, { now }).state === CHECKOUT_TIMING.TOO_EARLY) {
+    return "too_early";
+  }
   return "available";
 }
 
@@ -1071,7 +1088,7 @@ attendanceRouter.post(
         ...scope,
       }
     );
-    const checkoutState = checkoutAvailability(candidate);
+    const checkoutState = checkoutAvailability(candidate, checkOutTime);
     if (checkoutState === "not_checked_in_today") {
       return res.status(400).json({
         detail: "This instructor has not checked in today",
@@ -1081,6 +1098,24 @@ attendanceRouter.post(
       return res.status(409).json({
         detail: "This instructor has already checked out today",
         attendance_id: String(candidate._id),
+      });
+    }
+    /**
+     * Too soon to close this day, so nothing is recorded.
+     *
+     * Refused before the photograph is decoded or stored: an early appearance
+     * should cost nothing and leave nothing behind. The response names the time
+     * check-out opens, because somebody standing at the tablet who is told only
+     * "no" cannot tell a rule from a fault.
+     */
+    if (checkoutState === "too_early") {
+      const timing = checkoutTiming(candidate.check_in_time, { now: checkOutTime });
+      return res.status(409).json({
+        detail: describeCheckoutTiming(timing),
+        outcome: "TOO_EARLY",
+        attendance_id: String(candidate._id),
+        checkout_opens_at: timing.opens_at,
+        minutes_remaining: timing.minutes_remaining,
       });
     }
 

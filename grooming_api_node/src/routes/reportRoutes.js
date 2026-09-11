@@ -14,6 +14,11 @@ import {
 } from "../services/instructorReports.js";
 import { getReportRecipients } from "../services/reportRecipients.js";
 import { deletePhoto } from "../services/photoStorage.js";
+import {
+  closeOpenCheckIns,
+  dayToClose,
+  openCheckInFilter,
+} from "../services/openCheckIns.js";
 
 /** Attendance photographs are kept for this long, then deleted. */
 const PHOTO_RETENTION_MONTHS = 2;
@@ -547,6 +552,51 @@ reportRouter.post(
         ? "Queueing runs in the background; each reminder is an idempotent delivery job with retries."
         : "A reminder run for today is already in progress.",
     });
+  })
+);
+
+/**
+ * Marks yesterday's unclosed check-ins as never checked out.
+ *
+ * Scheduled for local midnight, when the day is over and a record still open
+ * means somebody went home without tapping out rather than somebody still
+ * working. Without this the distinction lives nowhere: the record simply has no
+ * check-out time, which reads the same whether the session is running or was
+ * abandoned months ago.
+ *
+ * The mark is descriptive and never a lock. A session that began at 11 PM is
+ * genuinely still running when midnight marks it, and closing it afterwards
+ * replaces the mark with a real check-out time.
+ *
+ * ?date=YYYY-MM-DD closes a specific local day, for a run that was missed.
+ * ?dry=1 reports how many records would be marked without writing anything.
+ */
+reportRouter.post(
+  "/cron/close-open-checkins",
+  requireCronSecret,
+  asyncRoute(async (req, res) => {
+    const db = req.app.locals.db;
+    const requested = req.query.date;
+    if (requested !== undefined && (typeof requested !== "string" || !isValidDateKey(requested))) {
+      return res.status(422).json({ detail: "date must be a valid YYYY-MM-DD local date" });
+    }
+    const day = requested || dayToClose(new Date());
+    const dryRun = req.query.dry === "1" || req.query.dry === "true";
+
+    if (dryRun) {
+      const would = await db.collection("attendance").countDocuments(openCheckInFilter(day));
+      return res.json({ dry_run: true, day, would_mark: would });
+    }
+
+    const result = await closeOpenCheckIns(db, { dayKey: day });
+    // Worth watching rather than merely logging: a rising count means
+    // instructors are not being prompted to check out.
+    console.log(JSON.stringify({
+      event: "open_checkins_closed",
+      day: result.day,
+      marked: result.marked,
+    }));
+    return res.json({ day: result.day, marked: result.marked });
   })
 );
 

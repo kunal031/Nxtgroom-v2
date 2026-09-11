@@ -425,7 +425,7 @@ export default function DailyAttendanceTable({ onRowClick, canBulkDelete = false
                     </td>
                     <td className="p-4 text-sm font-bold text-slate-700 whitespace-nowrap">{formatAttendanceTime(record.check_in_time)}</td>
                     <td className="p-4 text-sm font-bold text-slate-700 whitespace-nowrap">
-                      {checkoutDateTimeLabel(record.check_in_time, record.check_out_time)}
+                      {checkoutDateTimeLabel(record.check_in_time, record.check_out_time, record.checkout_status)}
                     </td>
                     <td className="p-4 text-sm text-slate-500 truncate">
                       {record.location_coordinates ? (

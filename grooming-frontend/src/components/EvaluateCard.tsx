@@ -315,11 +315,19 @@ export default function EvaluateCard({
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       if (error instanceof ApiError && error.status === 409) {
-        const existingId = (error.details as { attendance_id?: string } | null)?.attendance_id;
+        const details = error.details as { attendance_id?: string; outcome?: string } | null;
+        const existingId = details?.attendance_id;
         setReportTarget(null);
         setActiveRecordId(existingId ?? null);
         setMessage({ type: 'error', text });
-        toast.error('Already checked out', { detail: text });
+        // Too soon to close the day is also a 409, and it is not a failure:
+        // nothing was recorded and nothing went wrong. Titling it "Already
+        // checked out" would tell somebody who has not checked out at all that
+        // they had, which is worse than saying nothing.
+        toast.error(
+          details?.outcome === 'TOO_EARLY' ? 'Check-out not open yet' : 'Already checked out',
+          { detail: text },
+        );
         return;
       }
       // Reported inside the dialog when one is open, so the failure appears

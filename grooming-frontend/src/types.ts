@@ -113,6 +113,12 @@ export interface AttendanceRecord {
   check_out_location_accuracy_m?: number | null;
   /** Its own reverse-geocoded name: the two halves can be different places. */
   check_out_location_address?: string | null;
+  /**
+   * Set to "not_checked_out" by the midnight job when a day ended with the
+   * check-in still open. Descriptive only: the record stays closeable, so a
+   * session that ran past midnight can still be closed afterwards.
+   */
+  checkout_status?: string | null;
   /** The check-out's own verdict. The fields above hold the check-in's. */
   checkout_compliance_status?: string | null;
   checkout_remarks?: string | null;

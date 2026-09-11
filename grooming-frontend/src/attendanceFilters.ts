@@ -48,12 +48,21 @@ export function attendanceSessionDateLabel(
   return formatAttendanceDate(start);
 }
 
-/** Shows the checkout calendar date when it differs from the check-in date. */
+/**
+ * Shows the checkout calendar date when it differs from the check-in date.
+ *
+ * `checkoutStatus` distinguishes a day that ended with nobody checking out from
+ * one still in progress. Both have no check-out time, and a dash for each read
+ * as "not yet" for a record that was abandoned weeks ago.
+ */
 export function checkoutDateTimeLabel(
   checkIn?: string | Date | null,
   checkOut?: string | Date | null,
+  checkoutStatus?: string | null,
 ): string {
-  if (!checkOut) return '--';
+  if (!checkOut) {
+    return checkoutStatus === 'not_checked_out' ? 'Not checked out' : '--';
+  }
   if (checkIn) {
     const checkInKey = localDateValue(new Date(checkIn));
     const checkOutKey = localDateValue(new Date(checkOut));
