@@ -49,6 +49,8 @@ interface SessionState {
   canReanalyse?: boolean;
   /** Whether this account may name an unidentified check-in, and discard one. */
   canIdentify?: boolean;
+  /** Whether this tablet's college identifies the instructor from the photo. */
+  faceIdentification?: boolean;
   canDeleteCheckout?: boolean;
 }
 
@@ -142,7 +144,7 @@ export default function App() {
           throw new Error('The server returned an invalid user role.');
         }
         saveSession(session.token as string, currentUser.role);
-        setSession({ token: session.token, role: currentUser.role, email: currentUser.email || null, collegeId: currentUser.college_id || null, validated: true, canDeleteRecords: Boolean(currentUser.can_delete_records), canDeleteCheckout: Boolean(currentUser.can_delete_checkout), canReanalyse: Boolean(currentUser.reanalyse_enabled), canIdentify: Boolean(currentUser.can_identify) });
+        setSession({ token: session.token, role: currentUser.role, email: currentUser.email || null, collegeId: currentUser.college_id || null, validated: true, canDeleteRecords: Boolean(currentUser.can_delete_records), canDeleteCheckout: Boolean(currentUser.can_delete_checkout), canReanalyse: Boolean(currentUser.reanalyse_enabled), canIdentify: Boolean(currentUser.can_identify), faceIdentification: Boolean(currentUser.face_identification) });
       } catch (error) {
         if (!controller.signal.aborted && (error as { status?: number })?.status !== 401) setSessionCheckError(error instanceof Error ? error.message : String(error));
       }
@@ -362,6 +364,7 @@ export default function App() {
                 <EvaluateCard
                   instructors={instructors}
                   fetchInstructors={fetchInstructors}
+                  faceIdentification={session.faceIdentification}
                   onInstructorGenderSaved={(instructorId, gender) => {
                     setInstructors((current) => current.map((instructor) => (
                       instructor._id === instructorId ? { ...instructor, gender } : instructor

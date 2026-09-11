@@ -71,7 +71,13 @@ export const instructorGenderSchema = z.object({
 });
 
 export const checkoutSchema = z.object({
-  instructor_id: z.string().trim().min(1).max(100),
+  // Optional because a face-only college sends no id: the photograph decides
+  // whose session is being closed. The route still requires one in selector
+  // mode, so relaxing it here does not let an unidentified check-out through.
+  instructor_id: z.preprocess(
+    (value) => (value === "" || value == null ? undefined : value),
+    z.string().trim().min(1).max(100).optional()
+  ),
   location_coordinates: z.string().trim().max(100).optional().refine(
     (value) => !value || Boolean(parseCoordinates(value)),
     "location_coordinates must be valid latitude,longitude"

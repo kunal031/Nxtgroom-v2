@@ -202,6 +202,12 @@ export interface CurrentUser {
    * record becomes and enrolls that photograph as a face for them.
    */
   can_identify?: boolean;
+  /**
+   * Whether this tablet's college identifies the instructor from the check-in
+   * photograph. Resolved server-side for the signed-in account's own college,
+   * so the capture screen shows a selector only where one still applies.
+   */
+  face_identification?: boolean;
 }
 
 /** One account's capabilities, and where each answer comes from. */

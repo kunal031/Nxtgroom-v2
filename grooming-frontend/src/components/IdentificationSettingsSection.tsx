@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ScanFace, TriangleAlert } from 'lucide-react';
 import { apiFetch, apiJson } from '../api';
+import CollegeEnrolmentList from './CollegeEnrolmentList';
 import { useToast } from './useToast';
 import type { CollegeIdentification, IdentificationMode, IdentificationSettings } from '../types';
 
@@ -23,6 +24,8 @@ export default function IdentificationSettingsSection() {
   const [settings, setSettings] = useState<IdentificationSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  /** The college whose instructors are being enrolled, or null for the table. */
+  const [openCollege, setOpenCollege] = useState<{ id: string; name: string } | null>(null);
   const toast = useToast();
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -119,6 +122,19 @@ export default function IdentificationSettingsSection() {
     );
   }
 
+  if (openCollege) {
+    return (
+      <CollegeEnrolmentList
+        collegeId={openCollege.id}
+        collegeName={openCollege.name}
+        onBack={() => setOpenCollege(null)}
+        // Reloaded rather than patched: the percentage, the low-enrolment flag
+        // and the warning above the table are all derived server-side.
+        onEnrolmentChanged={() => { void load(); }}
+      />
+    );
+  }
+
   const lowEnrolmentColleges = settings.colleges.filter((college) => college.low_enrolment);
 
   return (
@@ -128,11 +144,6 @@ export default function IdentificationSettingsSection() {
           <ScanFace size={18} className="text-indigo-600" aria-hidden="true" />
           Instructor identification
         </h3>
-        <p className="text-sm text-slate-500 mt-1">
-          Face recognition identifies the instructor from their check-in photo and shows no
-          selector. A photo that cannot be matched is still recorded, and waits for an
-          administrator to attach the right instructor.
-        </p>
 
         <div className="mt-4 flex items-center gap-3 flex-wrap">
           <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
@@ -183,10 +194,21 @@ export default function IdentificationSettingsSection() {
                 </td>
               </tr>
             ) : (
+              // The whole row opens the college, not just its name: the name is
+              // a small target, and every cell in the row is about the same
+              // college. The mode buttons stop the click travelling up, so
+              // changing a mode does not also navigate.
               settings.colleges.map((college) => (
-                <tr key={college.college_id} className="hover:bg-slate-50 transition-colors">
+                <tr
+                  key={college.college_id}
+                  onClick={() => setOpenCollege({
+                    id: college.college_id,
+                    name: college.college_name || 'College',
+                  })}
+                  className="hover:bg-slate-50 transition-colors cursor-pointer"
+                >
                   <td className="p-4">
-                    <span className="font-bold text-slate-800">
+                    <span className="font-bold text-slate-800 hover:text-indigo-700">
                       {college.college_name || '--'}
                     </span>
                     {college.source === 'DEFAULT' && (
@@ -212,7 +234,8 @@ export default function IdentificationSettingsSection() {
                       </span>
                     )}
                   </td>
-                  <td className="p-4">
+                  {/* Stops a mode change from also opening the college. */}
+                  <td className="p-4" onClick={(event) => event.stopPropagation()}>
                     <div className="flex items-center gap-2 flex-wrap">
                       {modeButton(
                         college.mode === 'FACE_ONLY',

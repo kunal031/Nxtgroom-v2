@@ -115,6 +115,10 @@ test("login preserves the frontend authentication contract", async () => {
     // Whether this account may name an unidentified check-in. Always true for
     // an administrator; a BOA depends on the workspace and per-user settings.
     can_identify: true,
+    // Whether this tablet's college identifies from the photograph. FACE_ONLY is
+    // the default, and a super admin belongs to no college, so the workspace
+    // default is what answers here.
+    face_identification: true,
   });
 });
 

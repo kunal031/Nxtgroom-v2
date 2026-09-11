@@ -199,6 +199,10 @@ export async function enqueueEvaluation(db, payload) {
         ...(payload.imageBuffer ? { image: payload.imageBuffer } : {}),
         mime_type: payload.mimeType,
         check_in_time: payload.checkInTime,
+        // Carried for a checkout job so the report it produces can state when
+        // the instructor actually left. Absent on a checkin job, where there is
+        // no check-out yet to describe.
+        ...(payload.checkOutTime ? { check_out_time: payload.checkOutTime } : {}),
         status: "queued",
         attempts: 0,
         available_at: now,
@@ -384,6 +388,31 @@ async function syncStoredEvaluation(db, job, evaluation, ownedStatus) {
       }
     );
     if (!attendanceUpdate.matchedCount) return false;
+
+    /**
+     * The routine check-out report, queued exactly as the check-in one is.
+     *
+     * This branch previously sent only the non-compliant alert below, because
+     * check-out ran its analysis inside the HTTP request and the route built the
+     * email outbox itself. Once check-out is queued like check-in the route no
+     * longer runs, so without this a compliant check-out would store its report
+     * and send nothing — while a failing one still emailed. A partial silence
+     * that no test covered and nobody would report as a bug.
+     */
+    await enqueueNotification(db, {
+      attendanceId: job.attendance_id,
+      type: "checkout",
+      toEmail: job.instructor?.email,
+      report: {
+        instructorName: job.instructor?.name || "Instructor",
+        overallStatus,
+        aiSummary: evaluation.ai_summary || "",
+        checkInTime: job.check_in_time,
+        checkOutTime: job.check_out_time || null,
+        imageQuality,
+      },
+    });
+
     // The check-out gets its own report email, built from its own evaluation
     // and linking to its own half. Previously nothing was sent for it, so the
     // only report anybody ever received described the morning.

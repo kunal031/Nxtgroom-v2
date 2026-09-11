@@ -27,12 +27,23 @@ interface EvaluateCardProps {
   instructors: Instructor[];
   fetchInstructors: () => Promise<void> | void;
   onInstructorGenderSaved: (instructorId: string, gender: string) => void;
+  /**
+   * Whether this tablet's college identifies the instructor from the check-in
+   * photograph. When it does there is no selector: the face decides who the
+   * record belongs to, and a photograph nobody is recognised from is saved for
+   * an administrator to name rather than refused.
+   *
+   * Check-out keeps its selector either way — it closes one specific open
+   * session, and the face is not what decides which.
+   */
+  faceIdentification?: boolean;
 }
 
 export default function EvaluateCard({
   instructors,
   fetchInstructors,
   onInstructorGenderSaved,
+  faceIdentification = false,
 }: EvaluateCardProps) {
   const [selectedUuid, setSelectedUuid] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -161,14 +172,19 @@ export default function EvaluateCard({
 
   const handleCheckIn = async () => {
     const photoError = validatePhoto(file);
-    if (!selectedUuid || photoError) {
+    // Face identification needs nothing but the photograph. Demanding a
+    // selection would reintroduce the step this mode exists to remove, and the
+    // gender check cannot run either: nobody is identified until the server has
+    // matched the face, and an unmatched photo is saved for an administrator to
+    // name rather than refused.
+    if (photoError || (!faceIdentification && !selectedUuid)) {
       setMessage({
         type: 'error',
-        text: !selectedUuid ? 'Select an instructor to continue.' : photoError,
+        text: photoError || 'Select an instructor to continue.',
       });
       return;
     }
-    if (!requireSelectedGender()) return;
+    if (!faceIdentification && !requireSelectedGender()) return;
 
     setLoading(true);
     setMessage({ type: '', text: '' });
@@ -176,7 +192,11 @@ export default function EvaluateCard({
 
     // Open the dialog before the request so the saving step is visible from
     // the moment the button is pressed, rather than after the upload finishes.
-    const submittedName = instructors.find((item) => item._id === selectedUuid)?.name || 'Instructor';
+    // In face mode the name is not known until the server answers, so the
+    // dialog opens against the photograph rather than against a person.
+    const submittedName = faceIdentification
+      ? 'Identifying…'
+      : instructors.find((item) => item._id === selectedUuid)?.name || 'Instructor';
     setReportTarget({ attendanceId: null, instructorName: submittedName, kind: 'checkin' });
 
     // The watch keeps this current, so submitting never waits on the GPS and
@@ -185,7 +205,10 @@ export default function EvaluateCard({
     const coordinates = formatCoordinates(currentFix);
 
     const formData = new FormData();
-    formData.append('instructor_id', selectedUuid);
+    // Omitted in face mode. The server ignores a supplied id there, but sending
+    // one anyway would leave the selector half-wired and invite somebody to put
+    // it back.
+    if (!faceIdentification) formData.append('instructor_id', selectedUuid);
     // Already downscaled when it was selected, so upload as-is.
     formData.append('file', file as File);
     if (coordinates) {
@@ -242,11 +265,21 @@ export default function EvaluateCard({
   };
 
   const handleCheckOut = async () => {
-    if (!selectedUuid) {
-      setMessage({ type: 'error', text: 'Select an instructor to check out.' });
-      return;
+    // Face mode closes the session the photograph identifies, so it needs the
+    // photo and nothing else. The gender check cannot run either: nobody is
+    // identified until the server has matched the face.
+    if (faceIdentification) {
+      if (!file) {
+        setMessage({ type: 'error', text: 'Take a photo to check out.' });
+        return;
+      }
+    } else {
+      if (!selectedUuid) {
+        setMessage({ type: 'error', text: 'Select an instructor to check out.' });
+        return;
+      }
+      if (!requireSelectedGender()) return;
     }
-    if (!requireSelectedGender()) return;
 
     setCheckoutLoading(true);
     setMessage({ type: '', text: '' });
@@ -255,7 +288,9 @@ export default function EvaluateCard({
     // The check-out photo is assessed the same way the check-in one is, so it
     // gets the same dialog: the saving step is visible from the moment the
     // button is pressed rather than after the upload finishes.
-    const submittedName = instructors.find((item) => item._id === selectedUuid)?.name || 'Instructor';
+    const submittedName = faceIdentification
+      ? 'Identifying…'
+      : instructors.find((item) => item._id === selectedUuid)?.name || 'Instructor';
     const hasPhoto = Boolean(file);
     if (hasPhoto) {
       setReportTarget({ attendanceId: null, instructorName: submittedName, kind: 'checkout' });
@@ -263,9 +298,10 @@ export default function EvaluateCard({
 
     try {
       // Multipart so an optional check-out photo rides along. Check-out still
-      // succeeds without one.
+      // succeeds without one in a selector college; in face mode the photo is
+      // what says whose session to close, so it is required above.
       const formData = new FormData();
-      formData.append('instructor_id', selectedUuid);
+      if (!faceIdentification) formData.append('instructor_id', selectedUuid);
       // Downscaled at selection time, so no further processing is needed.
       if (file) formData.append('file', file);
       const currentFix = fix ?? getCachedFix();
@@ -373,7 +409,14 @@ export default function EvaluateCard({
             <span className="hidden sm:inline">Today,</span> {formatAttendanceDate(new Date())}
           </p>
         </div>
-        <p className="text-slate-500 text-sm mb-6 font-medium">Select an instructor to check in or check out.</p>
+        {/* The instruction has to match the mode. Telling somebody to select an
+            instructor when check-in no longer has a selector contradicts the
+            line under the search box and reads as a screen that did not load. */}
+        <p className="text-slate-500 text-sm mb-6 font-medium">
+          {faceIdentification
+            ? 'Take a photo to check in or check out. The instructor is identified from it.'
+            : 'Select an instructor to check in or check out.'}
+        </p>
 
         {/* Only failures remain on the page. A success message here repeated
             what the dialog already showed and lingered after it closed. */}
@@ -397,21 +440,28 @@ export default function EvaluateCard({
           </div>
         )}
 
-        <div className="mb-6">
-          <p className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Search Instructor</p>
-          {/* A native select cannot be searched past first-letter jumping, which
-              is unusable against 599 people. */}
-          <InstructorSearchSelect
-            instructors={instructors}
-            selectedId={selectedUuid}
-            onSelect={selectInstructor}
-            disabled={loading || checkoutLoading}
-          />
-        </div>
+        {/* Gone entirely where the face decides who the record belongs to: both
+            halves of the day are identified from the photograph, so there is
+            nobody left to choose. */}
+        {!faceIdentification && (
+          <div className="mb-6">
+            <p className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Search Instructor</p>
+            {/* A native select cannot be searched past first-letter jumping, which
+                is unusable against 599 people. */}
+            <InstructorSearchSelect
+              instructors={instructors}
+              selectedId={selectedUuid}
+              onSelect={selectInstructor}
+              disabled={loading || checkoutLoading}
+            />
+          </div>
+        )}
 
         <div className="flex-1 flex flex-col mb-6">
           <div className="flex items-center justify-between mb-2">
-            <p className="block text-xs font-bold text-slate-500 uppercase tracking-wider">Check-In Photo</p>
+            <p className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+              {faceIdentification ? 'Photo' : 'Check-In Photo'}
+            </p>
             {/* The front camera stays one tap away for anyone photographing
                 themselves, but it cannot frame a full body. */}
             <button

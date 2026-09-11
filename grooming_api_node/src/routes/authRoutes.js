@@ -16,6 +16,10 @@ import {
   canIdentifyAttendance,
   getAccessSettings,
 } from "../services/accessSettings.js";
+import {
+  getIdentificationSettings,
+  usesFaceIdentification,
+} from "../services/identificationSettings.js";
 import { getNotificationSettings } from "../services/notificationSettings.js";
 import {
   googleClientId,
@@ -117,6 +121,15 @@ authRouter.get("/me", getCurrentUser, asyncRoute(async (req, res) => {
     // reason as the delete flags: the queue is hidden rather than offered and
     // then refused. The server still checks on every assignment.
     can_identify: canIdentifyAttendance(req.currentUser, settings),
+    // Whether this tablet's college identifies the instructor from the
+    // photograph. Resolved for the caller's own college, so two tablets signed
+    // in as different colleges get different answers, and sent here rather than
+    // read from the settings endpoint because that one is elevated-only and the
+    // BOA at the tablet is the person who needs it.
+    face_identification: usesFaceIdentification(
+      await getIdentificationSettings(req.app.locals.db),
+      req.currentUser.collegeId
+    ),
   });
 }));
 

@@ -1074,17 +1074,87 @@ attendanceRouter.post(
   // vision model in-process, so one shared ceiling bounds the real work rather
   // than letting each half reach the limit independently.
   checkInConcurrencyGate,
-  // Accepts multipart so a check-out photo can be attached. The photo is
-  // optional: check-out must still work when a camera is unavailable.
+  // Accepts multipart so a check-out photo can be attached. Optional in a
+  // selector college, where check-out must still work when a camera is
+  // unavailable; required where the face is what says whose session to close.
   upload.single("file"),
   validate(checkoutSchema),
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
     const checkOutTime = new Date();
     const scope = attendanceScope(req.currentUser);
+
+    const identificationSettings = await getIdentificationSettings(db);
+    const faceMode = usesFaceIdentification(identificationSettings, req.currentUser.collegeId);
+
+    /**
+     * Who is checking out.
+     *
+     * In a selector college this is the submitted id, as it always was. In a
+     * face-only college the photograph decides, so it is normalized once here
+     * and the same buffer is reused for the appearance analysis further down:
+     * recognising one encoding and analysing another would make a failed match
+     * impossible to reproduce from the stored photo.
+     *
+     * An unrecognised face is refused rather than recorded. Unlike check-in
+     * there is nothing to create — a check-out closes one specific open
+     * session, and guessing which would attach one person's departure to
+     * another's day.
+     */
+    let instructorId = req.validatedBody.instructor_id || "";
+    let identifiedCheckout = null;
+    let normalizedCheckoutImage = null;
+
+    if (faceMode) {
+      if (!req.file) {
+        return res.status(422).json({
+          detail: "A photo is required to check out. Take one so the instructor can be identified.",
+          outcome: "PHOTO_REQUIRED",
+        });
+      }
+      const validation = validateImageUpload(req.file);
+      if (!validation.valid) return res.status(400).json({ detail: validation.detail });
+      try {
+        normalizedCheckoutImage = await normalizeInstructorImage(req.file.buffer);
+      } catch {
+        return res.status(400).json({
+          detail: "Image could not be decoded; take a clear photo and try again",
+        });
+      }
+
+      if (!isFaceRecognitionConfigured()) {
+        return res.status(503).json({
+          detail: "Face recognition is not available right now, so check-out cannot identify anyone.",
+          outcome: "NOT_CONFIGURED",
+        });
+      }
+      const match = await searchFaceByImage(normalizedCheckoutImage.buffer);
+      if (!match.ok) {
+        incrementMetric("checkout_unrecognised_total");
+        return res.status(422).json({
+          // Says what to do about it: a bare refusal leaves somebody standing at
+          // a tablet with no idea whether to retry or find an administrator.
+          detail: "Not recognised. Try again, or ask an administrator to update your reference photo.",
+          outcome: match.reason,
+        });
+      }
+      instructorId = String(match.instructorId);
+      identifiedCheckout = {
+        method: "FACE",
+        outcome: "MATCHED",
+        similarity: match.similarity,
+        face_id: match.faceId,
+        runner_up_instructor_id: match.runnerUp?.instructorId || null,
+        runner_up_similarity: match.runnerUp?.similarity ?? null,
+        attempted_at: checkOutTime,
+      };
+    } else if (!instructorId) {
+      return res.status(422).json({ detail: "A valid instructor_id is required" });
+    }
+
     const candidate = await db.collection("attendance").findOne(
       {
-        ...attendanceOnLocalDay(req.validatedBody.instructor_id, checkOutTime),
+        ...attendanceOnLocalDay(instructorId, checkOutTime),
         ...scope,
       }
     );
@@ -1145,7 +1215,12 @@ attendanceRouter.post(
       const validation = validateImageUpload(req.file);
       if (!validation.valid) return res.status(400).json({ detail: validation.detail });
       try {
-        const normalized = await normalizeInstructorImage(req.file.buffer);
+        // Reused when face identification already normalized it. Decoding the
+        // same upload twice would store a second encoding of the bytes the
+        // match was made against, so a refused or mistaken match could not be
+        // reproduced from the photograph the record keeps.
+        const normalized = normalizedCheckoutImage
+          || await normalizeInstructorImage(req.file.buffer);
         const key = buildPhotoKey({
           instructorId: String(candidate.instructor_id),
           kind: "checkout",
@@ -1182,6 +1257,10 @@ attendanceRouter.post(
         ? { check_out_location_accuracy_m: req.validatedBody.location_accuracy_m }
         : {}),
       updated_at: checkOutTime,
+      // How this check-out established whose session it was closing. Kept
+      // beside the check-in's own identification so a record carries the
+      // evidence for both halves of the day.
+      ...(identifiedCheckout ? { checkout_identification: identifiedCheckout } : {}),
       checkout_email_status: recipient
         ? (req.file
           ? (checkOutPhotoKey ? "waiting_for_analysis" : "not_sent_analysis_failed")
@@ -1222,70 +1301,52 @@ attendanceRouter.post(
       void attachAddressToAttendance(db, attendance._id, checkoutCoordinates, "checkout");
     }
 
-    let checkoutEvaluation = null;
-    let checkoutAnalysisFailed = Boolean(req.file && !checkOutPhotoKey);
+    const checkoutAnalysisFailed = Boolean(req.file && !checkOutPhotoKey);
 
     // A photographed check-out is analysed in this request. Its email outbox
     // is created only after the detailed report is stored, so the email can
     // never race ahead carrying the morning/check-in assessment.
+    /**
+     * The photographed check-out is analysed by the worker, exactly as the
+     * check-in is.
+     *
+     * It used to run inside this request so its email could not race ahead of
+     * its report. The worker now owns both — it stores the report and only then
+     * queues the email — so the ordering is preserved without holding the
+     * connection open for a vision call. That matters because the tablet is a
+     * kiosk: a person stands in front of it, and twenty seconds of waiting for
+     * an analysis nobody is reading blocks the next person in the queue.
+     *
+     * A failure to enqueue is logged rather than surfaced. The check-out itself
+     * is committed and is what attendance depends on; the outbox reconciler
+     * picks the job up on its next pass.
+     */
     if (checkOutPhotoKey) {
       try {
-        checkoutEvaluation = await evaluateCheckoutNow(db, {
+        await enqueueEvaluation(db, {
           attendanceId: attendance._id,
+          kind: "checkout",
           instructor: {
             id: String(candidate.instructor_id),
             name: attendance.instructor_name || instructor?.name || "Instructor",
             email: recipient || instructor?.email || null,
             gender: instructor?.gender || null,
+            collegeId: candidate.college_id ? String(candidate.college_id) : null,
           },
           photoKey: checkOutPhotoKey,
-          imageBuffer: checkOutPhoto?.buffer,
           mimeType: checkOutPhoto?.mimeType || "image/jpeg",
-          checkOutTime,
           checkInTime: attendance.check_in_time,
+          checkOutTime,
         });
-
-        checkoutPayload.report = {
-          ...checkoutPayload.report,
-          status: checkoutEvaluation.overall_status,
-          remarks: checkoutEvaluation.ai_summary || "",
-          imageQuality: checkoutEvaluation.image_quality || null,
-        };
-        checkoutPayload.created_at = new Date();
-        if (recipient) {
-          await db.collection("attendance").updateOne(
-            { _id: attendance._id },
-            {
-              $set: {
-                checkout_email_status: "outbox_pending",
-                _private_checkout_outbox: checkoutPayload,
-              },
-            }
-          );
-        }
       } catch (error) {
-        checkoutAnalysisFailed = true;
-        const code = String(error?.code || error?.name || "EVALUATION_ERROR").toUpperCase();
-        await db.collection("attendance").updateOne(
-          { _id: attendance._id },
-          {
-            $set: {
-              checkout_evaluation_queue_status: "failed",
-              checkout_analysis_error_code: code,
-              checkout_email_status: recipient ? "not_sent_analysis_failed" : "skipped_no_email",
-              updated_at: new Date(),
-            },
-            $unset: { _private_checkout_outbox: "" },
-          }
-        );
-        console.error(`Checkout evaluation failed for ${attendance._id} (${code})`);
+        console.error(`Checkout evaluation not queued for ${attendance._id} (${error?.name || "ERROR"})`);
       }
     }
 
-    // Without a photo this remains a plain checkout confirmation. With a
-    // photo, this point is reached only after the checkout evaluation and its
-    // detailed report have been committed.
-    if (recipient && (!req.file || checkoutEvaluation)) {
+    // A photoless check-out has no report to wait for, so its plain
+    // confirmation is queued here. A photographed one is emailed by the worker
+    // once the report exists, which is what keeps the email behind its report.
+    if (recipient && !req.file) {
       try {
         await enqueueNotification(db, {
           attendanceId: attendance._id,
@@ -1299,15 +1360,18 @@ attendanceRouter.post(
       }
     }
 
-    return res.json({
+    // 202 rather than 200: with a photo the appearance report is still being
+    // produced when this returns, so the check-out is accepted rather than
+    // complete.
+    return res.status(202).json({
       message: checkoutAnalysisFailed
-        ? "Check-out successful, but the appearance report could not be generated and no report email was sent."
+        ? "Check-out successful, but its photo could not be stored, so no appearance report will be produced."
         : recipient
-          ? "Check-out successful. Email confirmation is queued."
+          ? "Check-out successful. The appearance report and its email are queued."
           : "Check-out successful, but no email was sent because the instructor email is missing or invalid.",
       attendance_id: String(attendance._id),
-      analysis_queued: false,
-      analysis_completed: Boolean(checkoutEvaluation),
+      analysis_queued: Boolean(checkOutPhotoKey),
+      analysis_completed: false,
       analysis_failed: checkoutAnalysisFailed,
       photo_status: req.file ? (checkOutPhotoKey ? "stored" : "failed") : "not_provided",
       photo_warning: req.file && !checkOutPhotoKey
