@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, RefreshCw, SwitchCamera, X } from 'lucide-react';
 import {
+  AUTO_CAPTURE_CONFIRMATIONS,
+  AUTO_CAPTURE_COOLDOWN_MS,
+  autoCaptureFallbackDue,
+  autoCaptureReady,
   loadFullBodyDetector,
   readFrame,
   shutterEnabled,
@@ -17,6 +21,13 @@ interface CameraCaptureProps {
   onFlip: () => void;
   onCapture: (file: File) => void;
   onClose: () => void;
+  /**
+   * Take the photograph as soon as one whole person stands still, with no
+   * button press. The manual shutter stays available as a fallback, because the
+   * strict frame auto-capture needs is one a cramped room or a low-mounted
+   * tablet may never produce.
+   */
+  autoCapture?: boolean;
 }
 
 /** Failure modes worth telling apart: the fix differs for each. */
@@ -42,7 +53,13 @@ function describeCameraError(error: unknown): string {
  * enforce that — `capture` is only a hint, and on desktop it opens a file
  * browser — so the frame is grabbed from the camera stream directly.
  */
-export default function CameraCapture({ facing, onFlip, onCapture, onClose }: CameraCaptureProps) {
+export default function CameraCapture({
+  facing,
+  onFlip,
+  onCapture,
+  onClose,
+  autoCapture = false,
+}: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const analysisCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -54,6 +71,39 @@ export default function CameraCapture({ facing, onFlip, onCapture, onClose }: Ca
   // model was still loading briefly enabled capture on an empty frame.
   const [verdict, setVerdict] = useState<FrameVerdict>('NO_PERSON');
   const [guidance, setGuidance] = useState<string | null>('Step into the frame');
+  /** How many consecutive readings auto-capture could fire on. */
+  const [steadyFrames, setSteadyFrames] = useState(0);
+  /** Shown once the strict frame has proved unreachable, with the instruction. */
+  const [manualOffered, setManualOffered] = useState(!autoCapture);
+  /**
+   * Held in a ref rather than state because the inspection loop reads it on
+   * every tick: as state it would be captured stale by the running timer, and
+   * the camera would fire repeatedly during its own cooldown.
+   */
+  const cooldownUntilRef = useRef(0);
+  const firingRef = useRef(false);
+  /**
+   * The latest verdict, for the capture path.
+   *
+   * shoot is a callback the inspection loop also calls, so reading `verdict`
+   * from the closure would test whatever was current when the callback was
+   * built rather than what the camera is seeing now.
+   */
+  const verdictRef = useRef<FrameVerdict>('NO_PERSON');
+  // The same reasoning as cooldownUntilRef: the tick reads these every 200ms,
+  // and as state they would be captured stale by the running timer.
+  const steadyRef = useRef(0);
+  const unusableRef = useRef(0);
+  const manualOfferedRef = useRef(!autoCapture);
+  /**
+   * The current capture function, for the inspection loop.
+   *
+   * Listing `shoot` in the loop's dependencies would tear the loop down and
+   * rebuild it whenever the callback is rebuilt, which reloads the detector and
+   * discards a hold in progress. A ref keeps the loop reading the latest
+   * callback without restarting over it.
+   */
+  const shootRef = useRef<(options?: { viaAuto?: boolean }) => Promise<void>>(async () => {});
 
   const stop = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -148,6 +198,33 @@ export default function CameraCapture({ facing, onFlip, onCapture, onClose }: Ca
         const stableReading = stableState.reading;
         setVerdict(stableReading.verdict);
         setGuidance(stableReading.guidance);
+        verdictRef.current = stableReading.verdict;
+
+        if (autoCapture) {
+          // Counted from the stabilised verdict rather than the raw reading, so
+          // one noisy frame neither fires the camera nor resets a good hold.
+          const fireable = stableReading.verdict === 'FULL_BODY';
+          const held = fireable ? steadyRef.current + 1 : 0;
+          steadyRef.current = held;
+          setSteadyFrames(held);
+
+          // Only frames auto-capture cannot use count towards offering the
+          // button, so a good frame resets the run and the fallback appears when
+          // the camera genuinely cannot get a usable view.
+          unusableRef.current = fireable ? 0 : unusableRef.current + 1;
+          if (!manualOfferedRef.current && autoCaptureFallbackDue(unusableRef.current)) {
+            manualOfferedRef.current = true;
+            setManualOffered(true);
+          }
+
+          if (
+            autoCaptureReady(stableReading.verdict, held)
+            && Date.now() >= cooldownUntilRef.current
+            && !firingRef.current
+          ) {
+            void shootRef.current({ viaAuto: true });
+          }
+        }
         timer = setTimeout(tick, 200);
       };
       void tick();
@@ -159,7 +236,10 @@ export default function CameraCapture({ facing, onFlip, onCapture, onClose }: Ca
       clearTimeout(detectorGraceTimer);
       clearTimeout(timer);
     };
-  }, [error, facing]);
+    // autoCapture belongs here: it changes what the loop does on every tick, so
+    // switching it should restart the loop. shoot deliberately does not, and is
+    // reached through shootRef instead.
+  }, [error, facing, autoCapture]);
 
   // Releasing the camera when the screen is hidden matters on Android, where
   // a held stream keeps the camera indicator on and blocks other apps.
@@ -173,9 +253,19 @@ export default function CameraCapture({ facing, onFlip, onCapture, onClose }: Ca
 
   const ready = shutterEnabled(verdict, 0, false);
 
-  const shoot = async () => {
+  /**
+   * Captures the current frame.
+   *
+   * `viaAuto` bypasses the manual gate rather than sharing it: the two
+   * predicates answer different questions, and auto-capture has already applied
+   * the stricter one before calling.
+   */
+  const shoot = useCallback(async ({ viaAuto = false } = {}) => {
     const video = videoRef.current;
-    if (!video || !video.videoWidth || !ready) return;
+    if (!video || !video.videoWidth) return;
+    if (!viaAuto && !shutterEnabled(verdictRef.current, 0, false)) return;
+    if (firingRef.current) return;
+    firingRef.current = true;
     setCapturing(true);
     try {
       const canvas = document.createElement('canvas');
@@ -213,8 +303,23 @@ export default function CameraCapture({ facing, onFlip, onCapture, onClose }: Ca
       setError('The photo could not be captured. Try again.');
     } finally {
       setCapturing(false);
+      firingRef.current = false;
+      // Counted from the end of the capture, not the start: the upload and the
+      // recognition call happen after this, and restarting the clock earlier
+      // would let the next frame fire while the first was still in flight.
+      cooldownUntilRef.current = Date.now() + AUTO_CAPTURE_COOLDOWN_MS;
+      setSteadyFrames(0);
+      steadyRef.current = 0;
     }
-  };
+  }, [onCapture]);
+
+  // Published for the inspection loop, which reaches the capture function
+  // through a ref so rebuilding the callback does not restart the detector.
+  // Declared after shoot because a const cannot be referenced above its own
+  // declaration, even from an effect body that runs later.
+  useEffect(() => {
+    shootRef.current = shoot;
+  }, [shoot]);
 
   return (
     <div className="fixed inset-0 z-[120] bg-black flex flex-col" role="dialog" aria-modal="true" aria-label="Take photo">
@@ -290,17 +395,38 @@ export default function CameraCapture({ facing, onFlip, onCapture, onClose }: Ca
             )}
 
             {/* One line, only when something needs changing. A running
-                commentary on a correct frame is noise. */}
-            <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-6">
+                commentary on a correct frame is noise.
+
+                Auto-capture replaces "ready" with a count, because a camera
+                about to fire by itself has to say so: being photographed with
+                no warning is worse than waiting an extra moment. */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 flex flex-col items-center gap-2 px-6">
               {guidance ? (
                 <p className="rounded-full bg-slate-900/75 px-4 py-2 text-center text-sm font-semibold text-white" role="status">
                   {guidance}
+                </p>
+              ) : autoCapture && steadyFrames > 0 && steadyFrames < AUTO_CAPTURE_CONFIRMATIONS ? (
+                <p className="rounded-full bg-emerald-500/90 px-4 py-2 text-sm font-bold text-white" role="status">
+                  Hold still…
+                </p>
+              ) : autoCapture ? (
+                <p className="rounded-full bg-slate-900/75 px-4 py-2 text-sm font-semibold text-white" role="status">
+                  Stand in the outline to be photographed automatically
                 </p>
               ) : ready ? (
                 <p className="rounded-full bg-emerald-500/90 px-4 py-2 text-sm font-bold text-white" role="status">
                   Ready to take photo
                 </p>
               ) : null}
+
+              {/* Shown only once the strict frame has proved unreachable, with
+                  the instruction that usually fixes it. */}
+              {autoCapture && manualOffered && (
+                <p className="rounded-xl bg-amber-500/95 px-4 py-2 text-center text-xs font-semibold text-white max-w-xs" role="status">
+                  Stand straight in front of the camera with your whole body in the frame,
+                  or use the button below.
+                </p>
+              )}
             </div>
 
             {starting && (
@@ -316,9 +442,14 @@ export default function CameraCapture({ facing, onFlip, onCapture, onClose }: Ca
         className="flex flex-col items-center gap-3 py-6"
         style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}
       >
+        {/* Hidden while auto-capture is working, so nobody presses a button the
+            camera is about to press for them. It appears once the strict frame
+            has proved unreachable, which is the case where the rule would
+            otherwise stand between somebody and their attendance. */}
         <button
           type="button"
-          onClick={shoot}
+          onClick={() => void shoot()}
+          hidden={autoCapture && !manualOffered}
           disabled={Boolean(error) || starting || capturing || !ready}
           aria-label={ready ? 'Capture photo' : 'Position one person in the camera to capture a photo'}
           className="w-[72px] h-[72px] rounded-full bg-white border-4 border-white/40 active:scale-95 transition-transform disabled:opacity-40 flex items-center justify-center"

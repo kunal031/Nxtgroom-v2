@@ -374,3 +374,61 @@ export function shutterEnabled(
   if (verdict === 'MULTIPLE_PEOPLE' || verdict === 'NO_PERSON') return false;
   return true;
 }
+
+/**
+ * Readings of the same good frame required before the camera fires itself.
+ *
+ * Three at five readings a second is a little over half a second of standing
+ * still, which is short enough not to feel like waiting and long enough that
+ * somebody walking through the frame is not photographed.
+ */
+export const AUTO_CAPTURE_CONFIRMATIONS = 3;
+
+/**
+ * How long the camera waits after firing before it will fire again.
+ *
+ * Without it one person standing in front of the tablet is photographed every
+ * two hundred milliseconds, and every frame costs a recognition call, a vision
+ * call and a stored object.
+ */
+export const AUTO_CAPTURE_COOLDOWN_MS = 8_000;
+
+/**
+ * Consecutive unusable readings before the manual shutter is offered.
+ *
+ * Auto-capture needs a confident whole-body frame, which a cramped room, a
+ * low-mounted tablet or a failed detector may never produce. At that point the
+ * strict rule is the thing standing between somebody and their attendance, so
+ * the count is deliberately low: about five seconds of trying.
+ */
+export const AUTO_CAPTURE_FALLBACK_ATTEMPTS = 25;
+
+/**
+ * Whether the camera should take the photograph by itself.
+ *
+ * Deliberately stricter than shutterEnabled, which stays permissive because a
+ * person pressing the button has already judged the frame. Nobody judges an
+ * automatic capture, so PARTIAL, TOO_FAR and UNAVAILABLE are refused here even
+ * though a human may capture through all three: every automatic frame becomes a
+ * recognition call, a vision call and a photograph of somebody, and a
+ * half-framed one buys none of that.
+ *
+ * FULL_BODY only, held steady. MULTIPLE_PEOPLE is refused for the same reason
+ * the manual gate refuses it — there is no way to tell whose attendance it
+ * would be.
+ */
+export function autoCaptureReady(verdict: FrameVerdict, steadyFrames: number): boolean {
+  if (verdict !== 'FULL_BODY') return false;
+  return steadyFrames >= AUTO_CAPTURE_CONFIRMATIONS;
+}
+
+/**
+ * Whether a run of unusable frames has gone on long enough to offer the button.
+ *
+ * Counts only readings that auto-capture cannot use. A frame good enough to fire
+ * on resets the count, so the fallback appears when the camera genuinely cannot
+ * get a usable view rather than after a slow start.
+ */
+export function autoCaptureFallbackDue(unusableFrames: number): boolean {
+  return unusableFrames >= AUTO_CAPTURE_FALLBACK_ATTEMPTS;
+}

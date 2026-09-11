@@ -511,6 +511,7 @@ export default function EvaluateCard({
           onFlip={() => setFacing((current) => (current === 'user' ? 'environment' : 'user'))}
           onCapture={handleCapture}
           onClose={() => setCameraOpen(false)}
+          autoCapture
         />
       )}
 
