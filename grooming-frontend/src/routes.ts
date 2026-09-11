@@ -14,6 +14,7 @@ export const TABS = {
   OVERVIEW: 'overview',
   DAILY_RECORDS: 'daily-records',
   INSTRUCTOR_DETAIL: 'instructor-detail',
+  UNIDENTIFIED: 'unidentified',
   INSTRUCTORS: 'instructor-management',
   USERS: 'boa-management',
   SETTINGS: 'settings',
@@ -26,6 +27,7 @@ const TAB_TO_PATH: Record<Tab, string> = {
   [TABS.OVERVIEW]: '/attendance',
   [TABS.DAILY_RECORDS]: '/daily-records',
   [TABS.INSTRUCTOR_DETAIL]: '/daily-records/record',  // suffixed with the record id
+  [TABS.UNIDENTIFIED]: '/unidentified',
   [TABS.INSTRUCTORS]: '/instructors',
   [TABS.USERS]: '/users',
   [TABS.SETTINGS]: '/settings',

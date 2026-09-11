@@ -19,6 +19,11 @@ export const DEFAULT_ACCESS_SETTINGS = Object.freeze({
   // Removing a check-out leaves the check-in and its report standing, so it is
   // the lesser of the two and is granted separately.
   boa_can_delete_checkout: false,
+  // Naming an unidentified check-in decides whose attendance record it becomes
+  // and enrolls that photograph as a face for them, so it is off until somebody
+  // grants it. A BOA is usually the only person who can recognise a face from
+  // their own campus, which is why the capability exists to be granted at all.
+  boa_can_identify: false,
 });
 
 const BOOLEAN_KEYS = Object.keys(DEFAULT_ACCESS_SETTINGS);
@@ -109,6 +114,20 @@ export function canDeleteCheckout(user, settings = DEFAULT_ACCESS_SETTINGS) {
   if (canDeleteAttendance(user, settings)) return true;
   if (typeof user?.can_delete_checkout === "boolean") return user.can_delete_checkout;
   return Boolean(settings?.boa_can_delete_checkout);
+}
+
+/**
+ * Whether this user may name an unidentified check-in.
+ *
+ * Deliberately not implied by the delete permissions: discarding a photograph
+ * and deciding whose attendance record it becomes are different powers, and an
+ * administrator may well want one without the other.
+ */
+export function canIdentifyAttendance(user, settings = DEFAULT_ACCESS_SETTINGS) {
+  if (!user?.role) return false;
+  if (isElevated(user.role)) return true;
+  if (typeof user.can_identify === "boolean") return user.can_identify;
+  return Boolean(settings?.boa_can_identify);
 }
 
 /** The effective capability plus where it came from, for the permissions UI. */

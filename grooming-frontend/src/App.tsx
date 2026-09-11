@@ -36,6 +36,7 @@ const DailyAttendanceTable = lazy(() => import('./components/DailyAttendanceTabl
 const UserManagement = lazy(() => import('./components/UserManagement'));
 const SettingsPage = lazy(() => import('./components/SettingsPage'));
 const InstructorManagement = lazy(() => import('./components/InstructorManagement'));
+const UnidentifiedQueue = lazy(() => import('./components/UnidentifiedQueue'));
 
 interface SessionState {
   token: string | null;
@@ -46,12 +47,19 @@ interface SessionState {
   /** Decided by the server; the UI only uses it to hide what it would refuse. */
   canDeleteRecords?: boolean;
   canReanalyse?: boolean;
+  /** Whether this account may name an unidentified check-in, and discard one. */
+  canIdentify?: boolean;
   canDeleteCheckout?: boolean;
 }
 
 type AccountModal = 'profile' | 'password' | 'forgot' | null;
 
 const ADMIN_TABS = new Set(['boa-management', 'settings', 'instructor-management']);
+/**
+ * Gated on a capability rather than a role, so a URL typed by hand is refused
+ * the same way the navigation hides it.
+ */
+const IDENTIFY_TABS = new Set(['unidentified']);
 const INSTRUCTORS_PATH = '/api/v2/instructors?include_feedback=false';
 
 function initialSession(): SessionState {
@@ -134,7 +142,7 @@ export default function App() {
           throw new Error('The server returned an invalid user role.');
         }
         saveSession(session.token as string, currentUser.role);
-        setSession({ token: session.token, role: currentUser.role, email: currentUser.email || null, collegeId: currentUser.college_id || null, validated: true, canDeleteRecords: Boolean(currentUser.can_delete_records), canDeleteCheckout: Boolean(currentUser.can_delete_checkout), canReanalyse: Boolean(currentUser.reanalyse_enabled) });
+        setSession({ token: session.token, role: currentUser.role, email: currentUser.email || null, collegeId: currentUser.college_id || null, validated: true, canDeleteRecords: Boolean(currentUser.can_delete_records), canDeleteCheckout: Boolean(currentUser.can_delete_checkout), canReanalyse: Boolean(currentUser.reanalyse_enabled), canIdentify: Boolean(currentUser.can_identify) });
       } catch (error) {
         if (!controller.signal.aborted && (error as { status?: number })?.status !== 401) setSessionCheckError(error instanceof Error ? error.message : String(error));
       }
@@ -176,6 +184,7 @@ export default function App() {
   const navigate = useCallback((tab: string, { replace = false } = {}) => {
     let target = tab;
     if (ADMIN_TABS.has(tab) && !isElevatedRole(session.role)) target = 'overview';
+    else if (IDENTIFY_TABS.has(tab) && !session.canIdentify) target = 'overview';
     // The detail view renders one selected record, so it cannot be opened
     // cold from a URL; send those visits back to the list.
     else if (tab === 'instructor-detail' && !selectedAttendanceRecord) target = 'daily-records';
@@ -183,7 +192,7 @@ export default function App() {
     setActiveTab(target);
     if (replace || target !== tab) replaceTabPath(target);
     else pushTabPath(target);
-  }, [session.role, selectedAttendanceRecord]);
+  }, [session.role, session.canIdentify, selectedAttendanceRecord]);
 
   /**
    * Restores the record named in the URL. Opening the detail view from the
@@ -219,12 +228,15 @@ export default function App() {
     const onPopState = () => {
       const tab = currentTabFromLocation();
       setActiveTab(
-        ADMIN_TABS.has(tab) && !isElevatedRole(session.role) ? 'overview' : tab,
+        (ADMIN_TABS.has(tab) && !isElevatedRole(session.role))
+          || (IDENTIFY_TABS.has(tab) && !session.canIdentify)
+          ? 'overview'
+          : tab,
       );
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [session.role, publicReport, resetToken]);
+  }, [session.role, session.canIdentify, publicReport, resetToken]);
 
   // Normalise the entry URL once the session is known: "/" becomes
   // "/attendance", and a deep link the role cannot open is rewritten rather
@@ -236,12 +248,15 @@ export default function App() {
     if (publicReport || resetToken) return;
     if (!session.validated || !session.token) return;
     const tab = currentTabFromLocation();
-    const allowed = ADMIN_TABS.has(tab) && !isElevatedRole(session.role) ? 'overview' : tab;
+    const allowed = (ADMIN_TABS.has(tab) && !isElevatedRole(session.role))
+      || (IDENTIFY_TABS.has(tab) && !session.canIdentify)
+      ? 'overview'
+      : tab;
     setActiveTab(allowed);
     // Carry the record id through, or normalising the entry URL would strip
     // it and the detail page would lose the record it was asked for.
     replaceTabPath(allowed, recordIdFromLocation() || undefined);
-  }, [session.validated, session.token, session.role, publicReport, resetToken]);
+  }, [session.validated, session.token, session.role, session.canIdentify, publicReport, resetToken]);
 
   // Checked before everything else, including the session validation gate: the
   // recipient has no account, and an administrator opening the link from their
@@ -312,6 +327,7 @@ export default function App() {
         navigate={navigate}
         role={session.role}
         email={session.email}
+        canIdentify={session.canIdentify}
         onLogout={handleLogout}
         onOpenProfile={() => setAccountModal('profile')}
         onOpenChangePassword={() => setAccountModal('password')}
@@ -392,6 +408,12 @@ export default function App() {
             <div className="w-full h-full"><SettingsPage /></div>
           )}
 
+          {/* Gated on the capability, not the role: a BOA granted it is often
+              the only person who can recognise a face from their own campus. */}
+          {activeTab === 'unidentified' && session.canIdentify && (
+            <div className="w-full h-full"><UnidentifiedQueue /></div>
+          )}
+
           {activeTab === 'instructor-management' && isElevatedRole(session.role) && (
             <div className="w-full h-full"><InstructorManagement /></div>
           )}
@@ -404,6 +426,7 @@ export default function App() {
         navigate={navigate}
         role={session.role}
         email={session.email}
+        canIdentify={session.canIdentify}
         onLogout={handleLogout}
         onOpenProfile={() => setAccountModal('profile')}
         onOpenChangePassword={() => setAccountModal('password')}

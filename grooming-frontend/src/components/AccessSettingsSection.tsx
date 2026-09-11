@@ -16,7 +16,7 @@ const ACCESS_PATH = '/api/v2/settings/access';
  * refused it under Users regardless of what is set here.
  */
 export default function AccessSettingsSection() {
-  const [settings, setSettings] = useState<AccessSettings>({ boa_can_delete_records: false, boa_can_delete_checkout: false });
+  const [settings, setSettings] = useState<AccessSettings>({ boa_can_delete_records: false, boa_can_delete_checkout: false, boa_can_identify: false });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
@@ -102,6 +102,28 @@ export default function AccessSettingsSection() {
             checked={settings.boa_can_delete_checkout || settings.boa_can_delete_records}
             disabled={loading || saving || settings.boa_can_delete_records}
             onChange={(value) => void update('boa_can_delete_checkout', value)}
+          />
+        </div>
+        {/* Independent of the delete permissions above, and not implied by
+            them: a BOA is often the only person who can recognise a face from
+            their own campus, yet need never be able to destroy a record. */}
+        <div className="flex items-start justify-between gap-6 border-t border-slate-100 p-4">
+          <div className="min-w-0">
+            <label htmlFor="boa_can_identify" className="block text-sm font-semibold text-slate-800">
+              Let BOAs name an unidentified check-in
+            </label>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Shows the Unidentified queue, where a check-in whose face was not recognised is
+              assigned to an instructor. Naming one records it as that instructor&rsquo;s attendance
+              and enrols the photograph so they are recognised next time. It also allows discarding
+              a photograph that shows no instructor.
+            </p>
+          </div>
+          <Toggle
+            id="boa_can_identify"
+            checked={settings.boa_can_identify}
+            disabled={loading || saving}
+            onChange={(value) => void update('boa_can_identify', value)}
           />
         </div>
       </div>

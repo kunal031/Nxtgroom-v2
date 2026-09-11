@@ -12,12 +12,36 @@ import {
   getIdentificationSettings,
   usesFaceIdentification,
 } from "../services/identificationSettings.js";
-import { isFaceRecognitionConfigured, searchFaceByImage } from "../services/faceRecognition.js";
+import {
+  deleteFaces,
+  facesToEvict,
+  indexFace,
+  isFaceRecognitionConfigured,
+  searchFaceByImage,
+} from "../services/faceRecognition.js";
 import { incrementMetric } from "../services/telemetry.js";
 import { localDateKey } from "../services/instructorReports.js";
 import { enqueueNotification } from "../services/notificationWorker.js";
-import { buildPhotoKey, deletePhoto, getPhotoUrl, uploadPhoto } from "../services/photoStorage.js";
-import { canDeleteAttendance, canDeleteCheckout, getAccessSettings } from "../services/accessSettings.js";
+import {
+  buildPhotoKey,
+  deletePhoto,
+  downloadPhoto,
+  getPhotoUrl,
+  uploadPhoto,
+} from "../services/photoStorage.js";
+import {
+  canDeleteAttendance,
+  canDeleteCheckout,
+  canIdentifyAttendance,
+  getAccessSettings,
+} from "../services/accessSettings.js";
+import {
+  assessIdentification,
+  explainFailure,
+  findRetryCandidates,
+  identifiedRecordUpdate,
+  IDENTIFY_OUTCOMES,
+} from "../services/identifyQueue.js";
 import { attachAddressToAttendance } from "../services/geocoding.js";
 import {
   asyncRoute,
@@ -726,6 +750,303 @@ attendanceRouter.post(
       message: "Check-in successful. AI analysis is queued.",
       attendance_id: attendance._id,
     });
+  })
+);
+
+/** Guard for queue work: naming a record, and discarding one. */
+async function requireIdentifyPermission(req, res, next) {
+  const settings = await getAccessSettings(req.app.locals.db);
+  if (!canIdentifyAttendance(req.currentUser, settings)) {
+    return res.status(403).json({ detail: "Not authorized to resolve unidentified check-ins" });
+  }
+  return next();
+}
+
+/**
+ * Check-ins whose face was not recognised, oldest first.
+ *
+ * Scoped like every other attendance read, which is why an unidentified record
+ * is stamped with the tablet's college: a BOA can only see their own, and
+ * without it the queue would be empty for the person who took the photograph.
+ *
+ * Each row carries the likely retry suggestions for its own day. They are
+ * offered, never applied — the photograph failed to match, so nothing actually
+ * links it to the recognised record beyond the college, the day and a few
+ * minutes, and discarding somebody's attendance on that basis would be a guess.
+ */
+attendanceRouter.get(
+  "/unidentified",
+  requireIdentifyPermission,
+  asyncRoute(async (req, res) => {
+    const db = req.app.locals.db;
+    let pagination;
+    try {
+      pagination = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+    } catch (error) {
+      if (error instanceof RangeError) return res.status(422).json({ detail: error.message });
+      throw error;
+    }
+
+    const filter = {
+      status: "unidentified",
+      instructor_id: null,
+      deleting_at: { $exists: false },
+      ...attendanceScope(req.currentUser),
+    };
+    const [records, total] = await Promise.all([
+      db.collection("attendance")
+        .find(filter)
+        .sort({ check_in_time: 1 })
+        .skip(pagination.offset)
+        .limit(pagination.limit)
+        .toArray(),
+      db.collection("attendance").countDocuments(filter),
+    ]);
+
+    // One query for every day present in this page, rather than one per row.
+    const days = [...new Set(records.map((row) => row.attendance_day).filter(Boolean))];
+    const sameDayRecords = days.length
+      ? await db.collection("attendance")
+          .find(
+            {
+              attendance_day: { $in: days },
+              instructor_id: { $type: "string" },
+              deleting_at: { $exists: false },
+              ...attendanceScope(req.currentUser),
+            },
+            {
+              projection: {
+                instructor_id: 1,
+                instructor_name: 1,
+                college_id: 1,
+                attendance_day: 1,
+                check_in_time: 1,
+                identification: 1,
+              },
+            }
+          )
+          .toArray()
+      : [];
+    const byDay = new Map();
+    for (const row of sameDayRecords) {
+      const key = String(row.attendance_day);
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(row);
+    }
+
+    return res.json({
+      total,
+      limit: pagination.limit,
+      offset: pagination.offset,
+      records: records.map((record) => ({
+        ...serializeAttendance(record),
+        failure_reason: record.identification?.outcome || null,
+        failure_explanation: explainFailure(record.identification?.outcome),
+        retry_candidates: findRetryCandidates(record, byDay.get(String(record.attendance_day)) || []),
+      })),
+    });
+  })
+);
+
+/**
+ * Names an unidentified check-in.
+ *
+ * The arrival itself is left alone — time, photograph, coordinates and address
+ * are what happened, and the only thing missing was who it happened to. The
+ * photograph is then enrolled as a face for that instructor, because a
+ * correction is the best possible reference: it is a real photo from the tablet
+ * in use, in that room's lighting, of the person recognition just failed on.
+ *
+ * `force` carries an administrator past the already-checked-in warning rather
+ * than the server deciding for them: that instructor having a record already is
+ * usually a retry the queue has not caught up with, and occasionally is not.
+ */
+attendanceRouter.post(
+  "/:attendanceId/identify",
+  requireIdentifyPermission,
+  asyncRoute(async (req, res) => {
+    const db = req.app.locals.db;
+    const instructorId = String(req.body?.instructor_id || "").trim();
+    if (!instructorId || instructorId.length > 100) {
+      return res.status(422).json({ detail: "A valid instructor_id is required" });
+    }
+    const faceMode = String(req.body?.face_mode || "add").toLowerCase();
+    if (!["add", "replace", "none"].includes(faceMode)) {
+      return res.status(422).json({ detail: "face_mode must be add, replace, or none" });
+    }
+    const analyse = req.body?.analyse === true;
+    const force = req.body?.force === true;
+
+    const record = await db.collection("attendance").findOne({
+      _id: idMatch(req.params.attendanceId),
+      deleting_at: { $exists: false },
+      ...attendanceScope(req.currentUser),
+    });
+    const instructor = await db.collection("instructors").findOne(
+      activeInstructorFilter(req.currentUser, instructorId)
+    );
+    const existingRecordToday = instructor
+      ? await db.collection("attendance").findOne(attendanceOnLocalDay(instructor._id))
+      : null;
+
+    const assessment = assessIdentification({ record, instructor, existingRecordToday });
+    if (assessment.outcome === IDENTIFY_OUTCOMES.NOT_FOUND) {
+      return res.status(404).json({ detail: "Unidentified check-in not found" });
+    }
+    if (assessment.outcome === IDENTIFY_OUTCOMES.ALREADY_IDENTIFIED) {
+      return res.status(409).json({
+        detail: assessment.instructor_name
+          ? `This check-in was already identified as ${assessment.instructor_name}.`
+          : "This check-in has already been identified.",
+        outcome: assessment.outcome,
+      });
+    }
+    if (assessment.outcome === IDENTIFY_OUTCOMES.INSTRUCTOR_NOT_FOUND) {
+      return res.status(404).json({ detail: "Instructor not found" });
+    }
+    if (assessment.outcome === IDENTIFY_OUTCOMES.INSTRUCTOR_ALREADY_CHECKED_IN && !force) {
+      // Reported rather than refused: the administrator can see both records and
+      // is better placed than the server to say whether this was a retry.
+      return res.status(409).json({
+        detail: assessment.existing_was_recognised
+          ? "This instructor was already recognised and checked in today, so this photo is probably the failed attempt just before it. Discard it instead, or confirm to record it anyway."
+          : "This instructor already has a check-in today. Confirm to record this one as well.",
+        outcome: assessment.outcome,
+        existing_attendance_id: assessment.existing_attendance_id,
+        existing_check_in_time: assessment.existing_check_in_time,
+        existing_was_recognised: assessment.existing_was_recognised,
+      });
+    }
+
+    const now = new Date();
+    const update = identifiedRecordUpdate({
+      instructor,
+      record,
+      identifiedBy: req.currentUser?.email || null,
+      now,
+    });
+    // Claimed on status so two administrators resolving the same row cannot both
+    // succeed; the second finds it already identified.
+    const claimed = await db.collection("attendance").updateOne(
+      { _id: record._id, status: "unidentified", instructor_id: null },
+      { $set: update }
+    );
+    if (!claimed.matchedCount) {
+      return res.status(409).json({ detail: "This check-in was identified by someone else." });
+    }
+
+    // Enrollment is best effort. The attendance is now correct, and failing the
+    // request over a face that could not be indexed would undo work that
+    // succeeded; the administrator can add a photo from the instructor form.
+    let enrolled = null;
+    if (faceMode !== "none" && record.check_in_photo_key) {
+      try {
+        const photo = await downloadPhoto(record.check_in_photo_key);
+        const indexed = await indexFace(photo.buffer, String(instructor._id));
+        if (indexed.ok) {
+          const existingFaceIds = Array.isArray(instructor.face_ids)
+            ? instructor.face_ids.filter(Boolean).map(String)
+            : [];
+          const retired = faceMode === "replace"
+            ? existingFaceIds
+            : facesToEvict(existingFaceIds, { adding: 1 });
+          const kept = existingFaceIds.filter((id) => !retired.includes(id));
+          await db.collection("instructors").updateOne(
+            { _id: instructor._id },
+            {
+              $set: {
+                face_ids: [...kept, indexed.faceId],
+                face_indexed_at: now,
+                updated_at: now,
+              },
+            }
+          );
+          if (retired.length) await deleteFaces(retired);
+          enrolled = { face_id: indexed.faceId, retired: retired.length };
+        } else {
+          enrolled = { error: indexed.reason };
+        }
+      } catch (error) {
+        enrolled = { error: error?.name || "ENROLL_FAILED" };
+      }
+    }
+
+    // Analysis is offered rather than assumed: it spends a vision call, and an
+    // administrator resolving a backlog may not want one per row.
+    let queued = false;
+    if (analyse) {
+      try {
+        await enqueueEvaluation(db, {
+          attendanceId: record._id,
+          instructor: {
+            id: String(instructor._id),
+            name: instructor.name,
+            email: instructor.email,
+            gender: instructor.gender,
+            collegeId: instructor.college_id ? String(instructor.college_id) : null,
+          },
+          photoKey: record.check_in_photo_key,
+          mimeType: record.mime_type || "image/jpeg",
+          checkInTime: record.check_in_time,
+        });
+        await db.collection("attendance").updateOne(
+          { _id: record._id },
+          { $set: { evaluation_queue_status: "queued", updated_at: new Date() } }
+        );
+        queued = true;
+      } catch (error) {
+        console.error(`Identify queue: analysis not queued for ${record._id} (${error?.name || "ERROR"})`);
+      }
+    }
+
+    incrementMetric("checkin_identified_by_admin_total");
+    return res.json({
+      message: `Check-in assigned to ${instructor.name}.`,
+      attendance_id: String(record._id),
+      instructor_id: String(instructor._id),
+      analysis_queued: queued,
+      face_enrolled: enrolled,
+      gender_missing: assessment.outcome === IDENTIFY_OUTCOMES.NO_GENDER,
+    });
+  })
+);
+
+/**
+ * Discards an unidentified check-in.
+ *
+ * Its own action rather than the attendance delete permission: most of what
+ * reaches this queue is a wall, a passer-by or a test shot, and clearing those
+ * is queue work rather than destroying somebody's record. Only a record that
+ * still names nobody can be discarded this way, so an identified check-in cannot
+ * be removed through it.
+ */
+attendanceRouter.delete(
+  "/:attendanceId/unidentified",
+  requireIdentifyPermission,
+  asyncRoute(async (req, res) => {
+    const db = req.app.locals.db;
+    const record = await db.collection("attendance").findOne({
+      _id: idMatch(req.params.attendanceId),
+      status: "unidentified",
+      instructor_id: null,
+      ...attendanceScope(req.currentUser),
+    });
+    if (!record) {
+      return res.status(404).json({ detail: "Unidentified check-in not found" });
+    }
+
+    // Photo first, then the record: a deleted record with a surviving object
+    // would leave a photograph of somebody with nothing explaining why it is
+    // held, which is the opposite of what discarding is for.
+    if (record.check_in_photo_key) {
+      const removed = await deletePhoto(record.check_in_photo_key);
+      if (!removed.deleted) {
+        await compensateUploadedPhoto(db, record.check_in_photo_key, "unidentified_discarded");
+      }
+    }
+    await db.collection("attendance").deleteOne({ _id: record._id, instructor_id: null });
+    incrementMetric("checkin_unidentified_discarded_total");
+    return res.json({ message: "Unidentified check-in discarded" });
   })
 );
 

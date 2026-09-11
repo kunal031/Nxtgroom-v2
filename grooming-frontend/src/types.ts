@@ -190,6 +190,12 @@ export interface CurrentUser {
   can_delete_checkout?: boolean;
   /** Workspace-wide: whether the Re-analyse control is shown on a report. */
   reanalyse_enabled?: boolean;
+  /**
+   * Whether this account may name an unidentified check-in, and discard one.
+   * Off for a BOA until granted, since naming decides whose attendance a
+   * record becomes and enrolls that photograph as a face for them.
+   */
+  can_identify?: boolean;
 }
 
 /** One account's capabilities, and where each answer comes from. */
@@ -206,6 +212,12 @@ export interface UserPermissions {
 export interface AccessSettings {
   boa_can_delete_records: boolean;
   boa_can_delete_checkout: boolean;
+  /**
+   * Whether BOAs may name an unidentified check-in. Deliberately not implied by
+   * the delete permissions: discarding a photograph and deciding whose
+   * attendance record it becomes are different powers.
+   */
+  boa_can_identify: boolean;
 }
 
 export type IdentificationMode = 'FACE_ONLY' | 'SELECTOR';
