@@ -1,8 +1,9 @@
 import { useCallback, useState, useEffect, useMemo, type FormEvent } from 'react';
-import { Plus, UserCog, Search, Mail } from 'lucide-react';
+import { Plus, UserCog, Search, Mail, CircleAlert } from 'lucide-react';
 import { apiFetch, apiFetchAllPages, apiFetchCached, apiJson, invalidateCache, primeCache, readStale } from '../api';
 import ConfirmDialog from './ConfirmDialog';
 import InstructorGenderCell from './InstructorGenderCell';
+import ReferencePhotoField from './ReferencePhotoField';
 import RowActionsMenu from './RowActionsMenu';
 import SearchableSelect from './SearchableSelect';
 import { useToast } from './useToast';
@@ -39,6 +40,11 @@ export default function InstructorManagement() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [confirmTarget, setConfirmTarget] = useState<Instructor | null>(null);
+  /**
+   * Create mode holds the chosen reference photo until the instructor exists,
+   * because a face can only be enrolled against a record that has an id.
+   */
+  const [pendingPhoto, setPendingPhoto] = useState<File | null>(null);
   const toast = useToast();
 
   const [formData, setFormData] = useState<InstructorForm>({
@@ -90,6 +96,14 @@ export default function InstructorManagement() {
       setError('Please select an institute.');
       return;
     }
+    // Required only when adding by hand. The warehouse sync creates instructors
+    // with no photograph to offer, and the ~600 already on file are enrolled as
+    // the admin works through them, so the rule belongs to this form rather
+    // than to the record.
+    if (!isEditMode && !pendingPhoto) {
+      setError('Add a reference photo. It is what identifies this instructor at check-in.');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -112,10 +126,41 @@ export default function InstructorManagement() {
       } else if (saved?.id) {
         setInstructors((current) => [
           ...current,
-          { _id: saved.id as string, ...formData, daily_feedbacks: [] },
+          // face_count starts at zero so the row is marked as needing a photo
+          // until enrollment below actually succeeds.
+          { _id: saved.id as string, ...formData, daily_feedbacks: [], face_count: 0 },
         ]);
       }
-      toast.success(isEditMode ? 'Instructor updated' : 'Instructor added', { detail: formData.name });
+
+      // Enrolled after the record exists, since a face is indexed against the
+      // instructor's id. A failure here is reported without discarding the
+      // instructor that was just created: the photo can be added from the edit
+      // dialog, whereas rolling the creation back would lose the typed details.
+      let enrolled = true;
+      if (!isEditMode && saved?.id && pendingPhoto) {
+        try {
+          const form = new FormData();
+          form.append('photo', pendingPhoto, pendingPhoto.name || 'reference.jpg');
+          form.append('mode', 'add');
+          const face = await apiFetch<{ face_count?: number }>(
+            `/api/v2/instructors/${encodeURIComponent(String(saved.id))}/face`,
+            { method: 'POST', body: form, timeoutMs: 60_000 },
+          );
+          setInstructors((current) => current.map((ins) => (
+            String(ins._id) === String(saved.id)
+              ? { ...ins, face_count: face?.face_count ?? 1 }
+              : ins
+          )));
+        } catch (faceError) {
+          enrolled = false;
+          const detail = faceError instanceof Error ? faceError.message : String(faceError);
+          toast.error('Instructor saved, but the reference photo was not enrolled', { detail });
+        }
+      }
+
+      if (enrolled) {
+        toast.success(isEditMode ? 'Instructor updated' : 'Instructor added', { detail: formData.name });
+      }
       closeModal();
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : String(requestError);
@@ -149,12 +194,18 @@ export default function InstructorManagement() {
     setIsEditMode(false);
     setEditingId(null);
     setFormData({ name: '', employee_id: '', role: '', gender: 'MALE', college_id: '', email: '', phone_no: '' });
+    // Cleared on every open: a file left from a previous dialog would be
+    // enrolled against whichever instructor is created next.
+    setPendingPhoto(null);
+    setError('');
     setShowModal(true);
   };
 
   const openEditModal = (ins: Instructor) => {
     setIsEditMode(true);
     setEditingId(ins._id);
+    setPendingPhoto(null);
+    setError('');
     setFormData({
       name: ins.name,
       employee_id: ins.employee_id || '',
@@ -171,6 +222,7 @@ export default function InstructorManagement() {
     setShowModal(false);
     setIsEditMode(false);
     setEditingId(null);
+    setPendingPhoto(null);
   };
 
   /**
@@ -285,7 +337,19 @@ export default function InstructorManagement() {
               ) : (
                 filteredInstructors.map(ins => (
                   <tr key={ins._id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="p-4 font-bold text-slate-800">{ins.name}</td>
+                    <td className="p-4 font-bold text-slate-800">
+                      <span className="flex items-center gap-1.5">
+                        {ins.name}
+                        {/* Recognition needs an enrolled face. Without one this
+                            instructor reaches the unidentified queue on every
+                            check-in, which is worth seeing from the list. */}
+                        {!ins.face_count && (
+                          <span title="No reference photo: this instructor will not be recognised automatically">
+                            <CircleAlert size={14} className="text-amber-500 shrink-0" aria-label="No reference photo" />
+                          </span>
+                        )}
+                      </span>
+                    </td>
                     <td className="p-4">
                       <span className="inline-flex px-2.5 py-1 bg-indigo-50 text-indigo-700 font-bold text-[11px] rounded-md border border-indigo-100 whitespace-nowrap">
                         {ins.instructor_role || ins.role || '--'}
@@ -403,6 +467,13 @@ export default function InstructorManagement() {
                   <input maxLength={30} placeholder="+1 234 567 8900" className="w-full rounded-md border border-slate-200 p-3 text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all" value={formData.phone_no} onChange={e => setFormData({...formData, phone_no: e.target.value})} />
                 </div>
               </div>
+
+              <ReferencePhotoField
+                mode={isEditMode ? 'edit' : 'create'}
+                instructorId={isEditMode ? editingId : null}
+                required={!isEditMode}
+                onFileSelected={setPendingPhoto}
+              />
 
               <div className="pt-6 flex gap-3">
                 <button type="button" onClick={closeModal} disabled={saving} className="flex-1 px-4 py-3 rounded-md font-bold text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors disabled:opacity-50">Cancel</button>

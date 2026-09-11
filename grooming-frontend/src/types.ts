@@ -71,6 +71,13 @@ export interface Instructor {
   phone_no?: string | null;
   created_at?: string;
   daily_feedbacks?: DailyFeedback[];
+  /**
+   * How many reference faces are enrolled for this instructor. Zero or absent
+   * means recognition cannot identify them, so every check-in reaches the
+   * unidentified queue until a photo is added.
+   */
+  face_count?: number;
+  face_indexed_at?: string | null;
   /** Fields owned by the BigQuery roster; absent on manually created rows. */
   instructor_user_id?: string | null;
   instructor_role?: string | null;

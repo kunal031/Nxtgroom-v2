@@ -92,6 +92,28 @@ export function buildPhotoKey({ instructorId, kind, mimeType, now = new Date() }
 }
 
 /**
+ * Object key for one instructor's reference face photo.
+ *
+ * Deliberately outside the `attendance/` prefix. The retention purge walks
+ * attendance records and deletes the photo keys they hold, and the orphan
+ * reconciler lists `attendance/` and removes anything no record points at — a
+ * reference photo would match the second rule and be deleted roughly two
+ * months after enrollment. Recognition would keep working, because the face
+ * vector lives at Rekognition rather than in R2, so the only visible symptom
+ * would be a missing image in the admin screen, two months late, with nothing
+ * logged. Keeping these under their own prefix is what prevents that.
+ */
+export function buildReferencePhotoKey({ instructorId, mimeType, now = new Date() }) {
+  const extension = EXTENSIONS[mimeType] || "jpg";
+  const safeInstructor = String(instructorId).replace(/[^A-Za-z0-9_-]/g, "");
+  const unique = crypto.randomBytes(8).toString("hex");
+  // Timestamped so a replaced photo never collides with the one it replaces,
+  // which matters because the old object is deleted after the new one is
+  // written rather than before.
+  return `reference/${safeInstructor}/${now.getTime()}-${unique}.${extension}`;
+}
+
+/**
  * Uploads one photo. Returns { stored: false, reason } instead of throwing so
  * a storage outage cannot fail an attendance submission that is otherwise
  * valid; the caller records the reason and the check-in still succeeds.
