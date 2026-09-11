@@ -25,6 +25,12 @@ export type AttendanceStatus =
   | 'non_compliant'
   /** Analysed, but the photograph showed nothing to judge. Neither of the above. */
   | 'unassessed'
+  /**
+   * Recorded, but face recognition could not say who it is. Nothing was
+   * analysed and nothing is queued: it waits for an administrator to attach an
+   * instructor. Distinct from pending, which means analysis is still running.
+   */
+  | 'unidentified'
   | 'error'
   | 'pending';
 
@@ -200,6 +206,29 @@ export interface UserPermissions {
 export interface AccessSettings {
   boa_can_delete_records: boolean;
   boa_can_delete_checkout: boolean;
+}
+
+export type IdentificationMode = 'FACE_ONLY' | 'SELECTOR';
+
+/** One college's identification mode, with the enrolment behind it. */
+export interface CollegeIdentification {
+  college_id: string;
+  college_name: string | null;
+  mode: IdentificationMode;
+  /** COLLEGE when set for this college, DEFAULT when following the global one. */
+  source: 'COLLEGE' | 'DEFAULT';
+  instructors: number;
+  enrolled: number;
+  enrolled_percent: number;
+  /** Advisory: face-only with too few enrolled faces. Never changes the mode. */
+  low_enrolment: boolean;
+}
+
+export interface IdentificationSettings {
+  default_mode: IdentificationMode;
+  modes: IdentificationMode[];
+  low_enrolment_percent: number;
+  colleges: CollegeIdentification[];
 }
 
 export interface NotificationSettings {

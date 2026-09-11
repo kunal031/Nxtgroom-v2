@@ -16,6 +16,15 @@ import {
   validateAccessSettings,
 } from "../services/accessSettings.js";
 import {
+  describeCollegeIdentification,
+  getIdentificationSettings,
+  IDENTIFICATION_MODES,
+  loadCollegeEnrolment,
+  LOW_ENROLMENT_WARNING_RATIO,
+  saveIdentificationSettings,
+  validateIdentificationSettings,
+} from "../services/identificationSettings.js";
+import {
   adminSchema,
   adminUpdateSchema,
   boaSchema,
@@ -940,6 +949,56 @@ adminRouter.post(
       return res.status(404).json({ detail: "No active sign-in account for this BOA" });
     }
     return res.json({ message: "Password updated. The BOA must sign in again." });
+  })
+);
+
+/**
+ * Which colleges identify an instructor from their check-in photograph.
+ *
+ * Returned with each college's enrolment, because the mode and the readiness to
+ * use it are one decision: a college set to FACE_ONLY with few enrolled faces
+ * still records attendance, but every check-in lands in the unidentified queue.
+ * The low_enrolment flag is advisory — it is reported so the choice is informed,
+ * and never applied, since overriding an administrator's setting automatically
+ * would be the more surprising behaviour.
+ */
+adminRouter.get(
+  "/settings/identification",
+  requireSuperAdmin,
+  asyncRoute(async (req, res) => {
+    const db = req.app.locals.db;
+    const [settings, colleges, enrolment] = await Promise.all([
+      getIdentificationSettings(db),
+      db.collection("colleges")
+        .find(
+          { $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }] },
+          { projection: { name: 1 } }
+        )
+        .sort({ name: 1 })
+        .toArray(),
+      loadCollegeEnrolment(db),
+    ]);
+    return res.json({
+      default_mode: settings.default_mode,
+      modes: IDENTIFICATION_MODES,
+      low_enrolment_percent: Math.round(LOW_ENROLMENT_WARNING_RATIO * 100),
+      colleges: describeCollegeIdentification(settings, colleges, enrolment),
+    });
+  })
+);
+
+adminRouter.put(
+  "/settings/identification",
+  requireSuperAdmin,
+  asyncRoute(async (req, res) => {
+    const result = validateIdentificationSettings(req.body);
+    if (!result.valid) return res.status(422).json({ detail: result.detail });
+    const saved = await saveIdentificationSettings(
+      req.app.locals.db,
+      req.body,
+      req.currentUser?.email || null
+    );
+    return res.json(saved);
   })
 );
 

@@ -70,6 +70,10 @@ function feedbackStatus(status) {
   if (status === "pending") return "PENDING";
   if (status === "error") return "ERROR";
   if (status === "unassessed") return "UNASSESSED";
+  // No instructor was identified, so this day belongs to nobody's history yet.
+  // Reported as itself rather than falling through to UNKNOWN, which would
+  // read as a record whose status could not be understood.
+  if (status === "unidentified") return "UNIDENTIFIED";
   // Records evaluated before the review flag was removed still carry this
   // status. They were compliant results that had been flagged, so that is
   // what they report now; the stored value is left untouched.

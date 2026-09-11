@@ -8,6 +8,12 @@ import { validateImageUpload } from "../imageValidation.js";
 import { normalizeInstructorImage } from "../imageProcessor.js";
 import { enqueueEvaluation, evaluateCheckoutNow, evaluationFilter } from "../services/evaluationWorker.js";
 import { getNotificationSettings } from "../services/notificationSettings.js";
+import {
+  getIdentificationSettings,
+  usesFaceIdentification,
+} from "../services/identificationSettings.js";
+import { isFaceRecognitionConfigured, searchFaceByImage } from "../services/faceRecognition.js";
+import { incrementMetric } from "../services/telemetry.js";
 import { localDateKey } from "../services/instructorReports.js";
 import { enqueueNotification } from "../services/notificationWorker.js";
 import { buildPhotoKey, deletePhoto, getPhotoUrl, uploadPhoto } from "../services/photoStorage.js";
@@ -279,6 +285,84 @@ function lookupIdVariants(ids) {
  * transaction retries with the new profile, or check-in wins and the profile
  * mutation retries and observes the open attendance.
  */
+/**
+ * Records a check-in whose face was not recognised.
+ *
+ * There is no instructor to look up, so none of the usual guards apply: no
+ * gender to choose a dress code with, no email to send a report to, and no
+ * identity to test today's duplicate rule against. The record is still created,
+ * because the photograph and the time and place it was taken are the evidence
+ * somebody showed up, and discarding that to keep the data tidy would lose the
+ * attendance itself.
+ *
+ * The college comes from the account the tablet is signed in as. An unidentified
+ * record has no instructor to inherit one from, and without it a BOA cannot see
+ * the queue containing the photograph they just took — attendanceScope filters
+ * them to their own college.
+ *
+ * Deliberately not transactional: there is no instructor document to guard
+ * against a concurrent edit, and no duplicate-day rule to enforce, so the single
+ * insert is the whole operation.
+ */
+export async function commitUnidentifiedCheckIn(
+  db,
+  {
+    currentUser,
+    coordinates,
+    normalizedImage,
+    photoKey = null,
+    locationAccuracyM = null,
+    capturedAt = null,
+    recognition = null,
+    now = new Date(),
+  }
+) {
+  const attendance = createDocument({
+    // Null rather than absent: the partial index that enforces one record per
+    // instructor per day requires a string instructor_id, so these records sit
+    // outside it and several can exist for one day.
+    instructor_id: null,
+    instructor_name: null,
+    instructor_role: null,
+    college_id: currentUser.collegeId ? String(currentUser.collegeId) : null,
+    boa_id: currentUser.referenceId ? String(currentUser.referenceId) : "super-admin",
+    attendance_day: localDateKey(now, runtimeConfig().appTimeZone),
+    date: now,
+    check_in_time: now,
+    check_out_time: null,
+    location_coordinates: coordinates,
+    location_accuracy_m: locationAccuracyM,
+    check_in_photo_key: photoKey,
+    check_in_photo_captured_at: capturedAt || now,
+    check_out_photo_key: null,
+    // Its own status, so it is never counted as compliant, non-compliant or
+    // merely pending analysis. Nothing was assessed and nothing is queued.
+    status: "unidentified",
+    compliance_status: null,
+    remarks: "The instructor could not be identified from this photo. An administrator needs to attach the right instructor.",
+    // No job is queued, so no queue status is claimed. Analysis runs once an
+    // administrator attaches an instructor and chooses to analyse.
+    evaluation_queue_status: null,
+    checkin_email_status: "not_requested",
+    checkout_email_status: "not_requested",
+    identification: {
+      method: "FACE",
+      outcome: recognition?.reason || "NO_MATCH",
+      // The best score seen, even when it was below the accept threshold: it is
+      // the difference between "nobody resembled this face" and "somebody nearly
+      // did", which is what an administrator resolving the queue wants to know.
+      best_similarity: recognition?.bestSimilarity ?? null,
+      candidate_instructor_id: recognition?.candidateInstructorId || null,
+      attempted_at: now,
+    },
+    mime_type: normalizedImage.mimeType,
+    created_at: now,
+    updated_at: now,
+  });
+  await db.collection("attendance").insertOne(attendance);
+  return { outcome: "created_unidentified", attendance };
+}
+
 export async function commitGuardedCheckIn(
   db,
   {
@@ -289,6 +373,7 @@ export async function commitGuardedCheckIn(
     photoKey = null,
     locationAccuracyM = null,
     capturedAt = null,
+    identification = null,
     now = new Date(),
   },
   runTransaction = withMongoTransaction
@@ -361,6 +446,11 @@ export async function commitGuardedCheckIn(
       evaluation_queue_status: "outbox_pending",
       checkin_email_status: "waiting_for_analysis",
       checkout_email_status: "not_requested",
+      // How this record came to name the instructor it names. A face match and
+      // a BOA's dropdown choice are different kinds of evidence, and once the
+      // selector is retired this is the only way to tell a recognised record
+      // from one identified by hand, or to find the matches that were close.
+      ...(identification ? { identification } : {}),
       _private_evaluation_outbox: evaluationPayload,
       created_at: now,
       updated_at: now,
@@ -388,16 +478,138 @@ attendanceRouter.post(
     const validation = validateImageUpload(req.file);
     if (!validation.valid) return res.status(400).json({ detail: validation.detail });
 
-    const instructorId = String(req.body.instructor_id || "").trim();
-    if (!instructorId || instructorId.length > 100) {
+    const db = req.app.locals.db;
+    // The tablet is signed in as its own college, and that college decides
+    // whether this check-in identifies by face or by the submitted id. It has to
+    // be known before anybody has been identified, so it cannot come from the
+    // instructor.
+    const identificationSettings = await getIdentificationSettings(db);
+    const faceMode = usesFaceIdentification(identificationSettings, req.currentUser.collegeId);
+
+    const suppliedInstructorId = String(req.body.instructor_id || "").trim();
+    if (suppliedInstructorId.length > 100) {
       return res.status(422).json({ detail: "A valid instructor_id is required" });
     }
+    // Only the selector requires one. In face mode the photograph is the
+    // identity, and an id arriving anyway is ignored rather than trusted: the
+    // whole point is that nobody chooses who the record belongs to.
+    if (!faceMode && !suppliedInstructorId) {
+      return res.status(422).json({ detail: "A valid instructor_id is required" });
+    }
+
     const coordinates = parseCoordinates(req.body.location_coordinates);
     if (req.body.location_coordinates && !coordinates) {
       return res.status(422).json({ detail: "location_coordinates must be valid latitude,longitude" });
     }
 
-    const db = req.app.locals.db;
+    // Normalized before recognition so the bytes that identify the person are
+    // the same bytes that get stored and analysed. Recognising the raw upload
+    // and storing a re-encoded copy would make a failed match impossible to
+    // reproduce from the record.
+    let normalizedImage;
+    try {
+      normalizedImage = await normalizeInstructorImage(req.file.buffer);
+    } catch {
+      return res.status(400).json({
+        detail: "Image could not be decoded; upload a clear JPEG, PNG, or WebP",
+      });
+    }
+
+    let instructorId = suppliedInstructorId;
+    let identification = null;
+    let recognitionFailure = null;
+
+    if (faceMode) {
+      if (!isFaceRecognitionConfigured()) {
+        // Nothing can be recognised, and guessing from a submitted id would
+        // silently reintroduce the selector this mode exists to remove.
+        recognitionFailure = { reason: "NOT_CONFIGURED", bestSimilarity: null, candidateInstructorId: null };
+      } else {
+        const match = await searchFaceByImage(normalizedImage.buffer);
+        if (match.ok) {
+          instructorId = String(match.instructorId);
+          identification = {
+            method: "FACE",
+            outcome: "MATCHED",
+            similarity: match.similarity,
+            face_id: match.faceId,
+            // Kept so a near-tie between two people is findable later, even
+            // though look-alike handling is deliberately still open.
+            runner_up_instructor_id: match.runnerUp?.instructorId || null,
+            runner_up_similarity: match.runnerUp?.similarity ?? null,
+            attempted_at: new Date(),
+          };
+        } else {
+          recognitionFailure = {
+            reason: match.reason,
+            bestSimilarity: null,
+            candidateInstructorId: null,
+          };
+        }
+      }
+    } else {
+      identification = { method: "SELECTOR", outcome: "MATCHED", attempted_at: new Date() };
+    }
+
+    const now = new Date();
+
+    /**
+     * A photograph nobody could be identified from is still recorded.
+     *
+     * The alternative is refusing the check-in, which loses the evidence that
+     * somebody turned up because the lighting was poor or their reference photo
+     * is weak. No analysis is queued and no email is sent: gender decides which
+     * dress code applies and there is no instructor to take one from, so a
+     * report now would be an empty one. Both happen once an administrator
+     * attaches the right instructor.
+     */
+    if (recognitionFailure) {
+      const unidentifiedKey = buildPhotoKey({
+        instructorId: "unidentified",
+        kind: "checkin",
+        mimeType: normalizedImage.mimeType,
+        now,
+      });
+      const unidentifiedUpload = await uploadPhoto({
+        key: unidentifiedKey,
+        body: normalizedImage.buffer,
+        mimeType: normalizedImage.mimeType,
+        metadata: {
+          kind: "checkin",
+          identification: "unidentified",
+          outcome: recognitionFailure.reason,
+          captured_at: now.toISOString(),
+          coordinates: coordinates || "",
+        },
+      });
+      if (!unidentifiedUpload.stored) {
+        return res.status(503).json({
+          detail: "Photo storage is unavailable right now. Please try again in a moment.",
+        });
+      }
+
+      const unidentified = await commitUnidentifiedCheckIn(db, {
+        currentUser: req.currentUser,
+        coordinates,
+        normalizedImage,
+        photoKey: unidentifiedKey,
+        locationAccuracyM: Number.parseInt(req.body.location_accuracy_m, 10) || null,
+        capturedAt: now,
+        recognition: recognitionFailure,
+        now,
+      });
+      if (coordinates) {
+        void attachAddressToAttendance(db, unidentified.attendance._id, coordinates);
+      }
+      incrementMetric("checkin_unidentified_total");
+      return res.status(202).json({
+        message: "Check-in recorded, but the instructor could not be identified. An administrator will attach the right instructor.",
+        attendance_id: unidentified.attendance._id,
+        identified: false,
+        reason: recognitionFailure.reason,
+      });
+    }
+
     const instructor = await db.collection("instructors").findOne(
       activeInstructorFilter(req.currentUser, instructorId)
     );
@@ -421,19 +633,11 @@ attendanceRouter.post(
       });
     }
 
-    let normalizedImage;
-    try {
-      normalizedImage = await normalizeInstructorImage(req.file.buffer);
-    } catch {
-      return res.status(400).json({
-        detail: "Image could not be decoded; upload a clear JPEG, PNG, or WebP",
-      });
-    }
-
     // The photo goes to R2 and only its key is stored, so MongoDB never holds
     // image bytes. Upload before the transaction: a failure here should stop
     // the check-in rather than leave a record pointing at a missing object.
-    const now = new Date();
+    // `now` is the one declared before recognition ran, so the stored time is
+    // when the photograph arrived rather than when the match finished.
     const photoKey = buildPhotoKey({
       instructorId: String(instructor._id),
       kind: "checkin",

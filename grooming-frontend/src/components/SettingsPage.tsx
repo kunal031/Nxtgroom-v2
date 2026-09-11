@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Bell, Building2, Database, Users } from 'lucide-react';
+import { Bell, Building2, Database, ScanFace, Users } from 'lucide-react';
 import { apiFetch, apiJson } from '../api';
 import CollegeManagement from './CollegeManagement';
+import IdentificationSettingsSection from './IdentificationSettingsSection';
 import InstructorSyncPanel from './InstructorSyncPanel';
 import ReportRecipients from './ReportRecipients';
 import AccessSettingsSection from './AccessSettingsSection';
@@ -177,7 +178,7 @@ function NotificationSettings() {
 }
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<'notifications' | 'colleges' | 'sync' | 'rp'>('notifications');
+  const [tab, setTab] = useState<'notifications' | 'identification' | 'colleges' | 'sync' | 'rp'>('notifications');
 
   const tabClass = (value: string) =>
     `px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
@@ -190,7 +191,7 @@ export default function SettingsPage() {
     <section className="w-full flex flex-col h-full" aria-labelledby="settings-title">
       <div className="mb-5 shrink-0">
         <h2 id="settings-title" className="text-xl font-bold text-slate-800">Settings</h2>
-        <p className="text-sm text-slate-500 mt-1">Manage notifications, institutes, data sync and reporting partners.</p>
+        <p className="text-sm text-slate-500 mt-1">Manage notifications, identification, institutes, data sync and reporting partners.</p>
       </div>
 
       <div className="border-b border-slate-200 mb-6 shrink-0" role="tablist" aria-label="Settings sections">
@@ -204,6 +205,16 @@ export default function SettingsPage() {
           >
             <Bell size={16} aria-hidden="true" />
             Notifications
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'identification'}
+            onClick={() => setTab('identification')}
+            className={tabClass('identification')}
+          >
+            <ScanFace size={16} aria-hidden="true" />
+            Identification
           </button>
           <button
             type="button"
@@ -240,6 +251,7 @@ export default function SettingsPage() {
 
       <div className="flex-1 min-h-0 overflow-auto">
         {tab === 'notifications' && <NotificationSettings />}
+        {tab === 'identification' && <IdentificationSettingsSection />}
         {tab === 'colleges' && <CollegeManagement />}
         {tab === 'sync' && <InstructorSyncPanel />}
         {tab === 'rp' && <ReportRecipients />}

@@ -120,8 +120,14 @@ export function runtimeConfig() {
     // being built before the AWS collection exists, and check-in must keep
     // working until it does, so faceRecognition reports NOT_CONFIGURED.
     rekognitionCollectionId: (process.env.REKOGNITION_COLLECTION_ID || "").trim(),
-    // Defaults to the SES region so one AWS account and one key serve both.
-    rekognitionRegion: (process.env.AWS_REKOGNITION_REGION || process.env.AWS_REGION || "").trim(),
+    // Face recognition lives in its own AWS account, so it carries its own
+    // credentials and its own region. Deliberately no fallback to the SES key:
+    // the accounts are unrelated, so silently reusing the mail credential would
+    // authenticate against the wrong account and fail as AccessDenied, which
+    // reads like a broken policy rather than a missing setting.
+    rekognitionRegion: (process.env.AWS_REKOGNITION_REGION || "").trim(),
+    rekognitionAccessKeyId: (process.env.REKOGNITION_ACCESS_KEY_ID || "").trim(),
+    rekognitionSecretAccessKey: (process.env.REKOGNITION_SECRET_ACCESS_KEY || "").trim(),
     // A wrong identity files one instructor's grooming record under another
     // name, so the floor is deliberately high: below this the record is saved
     // unidentified for an admin to resolve, which is recoverable.

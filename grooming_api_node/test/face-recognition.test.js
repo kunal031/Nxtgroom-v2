@@ -80,12 +80,20 @@ async function withEnv(values, run) {
   }
 }
 
-/** The configured state: a collection plus the credentials the SDK needs. */
+/**
+ * The configured state: a collection, a region, and Rekognition's own
+ * credentials.
+ *
+ * Face recognition lives in a different AWS account from SES, so it reads
+ * REKOGNITION_* credentials and deliberately does not fall back to the mail
+ * account's key. Setting AWS_ACCESS_KEY_ID here would therefore leave the
+ * service unconfigured while looking configured.
+ */
 const configured = {
   REKOGNITION_COLLECTION_ID: COLLECTION,
   AWS_REKOGNITION_REGION: "ap-south-1",
-  AWS_ACCESS_KEY_ID: "test-access-key-id",
-  AWS_SECRET_ACCESS_KEY: "test-secret-access-key",
+  REKOGNITION_ACCESS_KEY_ID: "test-access-key-id",
+  REKOGNITION_SECRET_ACCESS_KEY: "test-secret-access-key",
 };
 
 test.afterEach(() => {

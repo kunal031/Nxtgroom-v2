@@ -56,8 +56,9 @@ export function isFaceRecognitionConfigured() {
   const config = runtimeConfig();
   return Boolean(
     config.rekognitionCollectionId
-    && process.env.AWS_ACCESS_KEY_ID?.trim()
-    && process.env.AWS_SECRET_ACCESS_KEY?.trim()
+    && config.rekognitionRegion
+    && config.rekognitionAccessKeyId
+    && config.rekognitionSecretAccessKey
   );
 }
 
@@ -68,10 +69,17 @@ export function isFaceRecognitionConfigured() {
 function getClient() {
   if (clientOverride) return clientOverride;
   const config = runtimeConfig();
-  const fingerprint = `${config.rekognitionRegion}|${process.env.AWS_ACCESS_KEY_ID || ""}`;
+  const fingerprint = `${config.rekognitionRegion}|${config.rekognitionAccessKeyId}`;
   if (!client || clientFingerprint !== fingerprint) {
     client = new RekognitionClient({
       region: config.rekognitionRegion,
+      // Passed explicitly rather than left to the SDK's credential chain, which
+      // would otherwise pick up the SES account's key from the environment and
+      // authenticate against an account that holds no face collection.
+      credentials: {
+        accessKeyId: config.rekognitionAccessKeyId,
+        secretAccessKey: config.rekognitionSecretAccessKey,
+      },
       maxAttempts: config.rekognitionMaxAttempts,
       requestHandler: { requestTimeout: config.rekognitionTimeoutMs },
     });

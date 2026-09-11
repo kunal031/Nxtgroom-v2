@@ -10,6 +10,12 @@ export function normalizeAttendanceStatus(status: unknown): AttendanceStatus {
       return 'non_compliant';
     case 'unassessed':
       return 'unassessed';
+    // Nobody was identified, so there is no verdict and nothing is running.
+    // Falling through to the default would have read as "analysis pending",
+    // which never resolves, and canOpenRecord would then hide the photograph
+    // from the person who just took it.
+    case 'unidentified':
+      return 'unidentified';
     // Records evaluated before the review flag was removed still carry these.
     // They were compliant results that had been flagged, so that is how they
     // read now. The stored value itself is left untouched.
