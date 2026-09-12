@@ -242,90 +242,86 @@ export default function UnidentifiedQueue() {
             const mode = faceModes[record._id] ?? 'add';
             const suggestion = record.retry_candidates[0];
             return (
-              <div key={record._id} className="bg-white rounded-md shadow-sm border border-slate-200 p-5">
-                <div className="flex flex-wrap gap-5">
-                  <div className="shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setPhotoFor(record)}
-                      className="h-28 w-28 rounded-md border border-slate-200 bg-slate-50 flex items-center justify-center text-slate-400 hover:bg-slate-100 transition-colors"
-                      aria-label="View the check-in photo"
-                    >
-                      <ImageIcon size={28} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPhotoFor(record)}
-                      className="mt-2 w-28 text-xs font-bold text-indigo-700 hover:underline"
-                    >
-                      View photo
-                    </button>
-                  </div>
+              <div key={record._id} className="bg-white rounded-md shadow-sm border border-slate-200 p-3">
+                {/* The photograph sets the card's height and everything else
+                    fits beside it. The failure reason is not shown: every row
+                    here is one recognition could not name, so saying so on each
+                    of them is the one thing the screen already means. */}
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPhotoFor(record)}
+                    className="h-20 w-20 shrink-0 rounded-md border border-slate-200 bg-slate-50 flex flex-col items-center justify-center gap-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 transition-colors"
+                    aria-label="View the check-in photo"
+                  >
+                    <ImageIcon size={22} aria-hidden="true" />
+                    <span className="text-[10px] font-bold text-indigo-700">View</span>
+                  </button>
 
-                  <div className="flex-1 min-w-[16rem] space-y-3">
-                    <div>
-                      <p className="text-sm font-bold text-slate-800">{timeLabel(record.check_in_time)}</p>
-                      <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
-                        <MapPin size={12} className="shrink-0" aria-hidden="true" />
-                        {record.location_address || formatCoordinates(record.location_coordinates)}
-                      </p>
-                      <p className="text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 rounded-md p-2 mt-2">
-                        {record.failure_explanation}
-                      </p>
+                  <div className="flex-1 min-w-0 flex flex-col gap-2">
+                    {/* When and where on the left, who on the right: one line
+                        rather than a stack, because the picker is the action
+                        and the time and place are what it is about. */}
+                    <div className="flex items-start gap-3 flex-wrap sm:flex-nowrap">
+                      <div className="min-w-0 sm:w-56 shrink-0">
+                        <p className="text-sm font-bold text-slate-800 truncate">
+                          {timeLabel(record.check_in_time)}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
+                          <MapPin size={12} className="shrink-0" aria-hidden="true" />
+                          <span className="truncate">
+                            {record.location_address || formatCoordinates(record.location_coordinates)}
+                          </span>
+                        </p>
+                      </div>
+                      <div className="flex-1 min-w-[12rem]">
+                        <InstructorSearchSelect
+                          instructors={instructors}
+                          selectedId={selection[record._id] || ''}
+                          onSelect={(id) => setSelection((current) => ({ ...current, [record._id]: id }))}
+                          disabled={busy}
+                        />
+                      </div>
                     </div>
 
-                    {/* Shown before the picker: when a retake already recorded
-                        this arrival, naming this row would create a duplicate,
-                        and discarding is the correct action. */}
+                    {/* Kept, unlike the failure reason: when a retake already
+                        recorded this arrival, naming this row would create a
+                        duplicate and discarding is the correct action. */}
                     {suggestion && (
-                      <div className="text-xs bg-sky-50 border border-sky-200 rounded-md p-2.5 text-sky-900">
+                      <p className="text-xs bg-sky-50 border border-sky-200 rounded-md px-2.5 py-1.5 text-sky-900">
                         <span className="font-bold">Possibly already resolved.</span>{' '}
-                        {suggestion.instructor_name || 'An instructor'} was recognised and checked in{' '}
-                        {suggestion.minutes_later} minute{suggestion.minutes_later === 1 ? '' : 's'} later,
-                        so this is probably the failed attempt just before it.
-                      </div>
+                        {suggestion.instructor_name || 'An instructor'} checked in{' '}
+                        {suggestion.minutes_later} minute{suggestion.minutes_later === 1 ? '' : 's'} later.
+                      </p>
                     )}
 
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                        Who is this?
-                      </label>
-                      <InstructorSearchSelect
-                        instructors={instructors}
-                        selectedId={selection[record._id] || ''}
-                        onSelect={(id) => setSelection((current) => ({ ...current, [record._id]: id }))}
-                        disabled={busy}
-                      />
-                    </div>
+                    {/* Controls and actions on one line: three small toggles, a
+                        checkbox and two buttons had taken three rows between
+                        them. */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {([
+                        ['add', 'Add'],
+                        ['replace', 'Replace'],
+                        ['none', 'Skip'],
+                      ] as [FaceMode, string][]).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setFaceModes((current) => ({ ...current, [record._id]: value }))}
+                          aria-pressed={mode === value}
+                          disabled={busy}
+                          title={`${label} this photo as a face reference`}
+                          className={`px-2 py-1 rounded-md text-xs font-bold border transition-colors disabled:opacity-50 ${
+                            mode === value
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
 
-                    <div className="flex flex-wrap items-center gap-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                          Face reference
-                        </span>
-                        {([
-                          ['add', 'Add'],
-                          ['replace', 'Replace'],
-                          ['none', 'Skip'],
-                        ] as [FaceMode, string][]).map(([value, label]) => (
-                          <button
-                            key={value}
-                            type="button"
-                            onClick={() => setFaceModes((current) => ({ ...current, [record._id]: value }))}
-                            aria-pressed={mode === value}
-                            disabled={busy}
-                            className={`px-2.5 py-1 rounded-md text-xs font-bold border transition-colors disabled:opacity-50 ${
-                              mode === value
-                                ? 'bg-indigo-600 text-white border-indigo-600'
-                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                            }`}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-
-                      <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
                         <input
                           type="checkbox"
                           checked={Boolean(analyseNow[record._id])}
@@ -336,28 +332,29 @@ export default function UnidentifiedQueue() {
                           disabled={busy}
                           className="rounded border-slate-300"
                         />
-                        Analyse grooming now
+                        Analyse now
                       </label>
-                    </div>
 
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => void identify(record)}
-                        disabled={busy || !selection[record._id]}
-                        className="px-4 py-2 rounded-md font-bold text-sm text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
-                      >
-                        {busy ? 'Saving…' : 'Assign instructor'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDiscardTarget(record)}
-                        disabled={busy}
-                        className="px-4 py-2 rounded-md font-bold text-sm text-rose-700 bg-rose-50 border border-rose-100 hover:bg-rose-100 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                      >
-                        <Trash2 size={14} aria-hidden="true" />
-                        Discard
-                      </button>
+                      <div className="flex items-center gap-2 ml-auto">
+                        <button
+                          type="button"
+                          onClick={() => void identify(record)}
+                          disabled={busy || !selection[record._id]}
+                          className="px-3 py-1.5 rounded-md font-bold text-xs text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
+                        >
+                          {busy ? 'Saving…' : 'Assign'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDiscardTarget(record)}
+                          disabled={busy}
+                          aria-label="Discard this check-in"
+                          className="px-3 py-1.5 rounded-md font-bold text-xs text-rose-700 bg-rose-50 border border-rose-100 hover:bg-rose-100 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          <Trash2 size={13} aria-hidden="true" />
+                          Discard
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
