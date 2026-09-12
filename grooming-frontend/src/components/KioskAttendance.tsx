@@ -119,15 +119,15 @@ export default function KioskAttendance({ onExit }: KioskAttendanceProps) {
 
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="mb-4 shrink-0 flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h2 className="text-xl font-extrabold text-slate-800">Attendance</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Stand in the outline. The photo is taken automatically and the instructor is
-            identified from it.
-          </p>
-        </div>
-        <p className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
+      {/* One short line, so the picture gets the rest of the screen. The
+          instructions that used to sit here are already on the camera itself,
+          where somebody standing in front of it is actually looking: the guide
+          outline shows where to stand, and the guidance line says what to fix
+          when the camera has not fired. Repeating them above the frame only
+          pushed the frame down. */}
+      <div className="mb-2 shrink-0 flex items-center justify-between gap-4">
+        <h2 className="text-lg font-extrabold text-slate-800">Attendance</h2>
+        <p className="text-xs font-medium text-slate-500 flex items-center gap-1.5 shrink-0">
           <MapPin size={14} className={fix ? 'text-emerald-600' : 'text-slate-400'} aria-hidden="true" />
           {fix ? `Live location (${describeAccuracy(fix)})` : 'Locating…'}
         </p>
