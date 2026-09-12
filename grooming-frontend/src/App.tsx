@@ -364,7 +364,7 @@ export default function App() {
               how a college mid-enrolment records attendance. */}
           {activeTab === 'overview' && session.faceIdentification && (
             <div className="w-full h-full">
-              <KioskAttendance />
+              <KioskAttendance onExit={() => navigate('daily-records')} />
             </div>
           )}
 

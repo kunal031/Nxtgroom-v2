@@ -23,6 +23,15 @@ interface KioskResult extends KioskResponse {
   at: number;
 }
 
+interface KioskAttendanceProps {
+  /**
+   * Leaves the camera. The screen is the camera, so closing it has to go
+   * somewhere rather than leaving an empty frame: Daily Records is where a BOA
+   * looks next, and it releases the stream on the way out.
+   */
+  onExit: () => void;
+}
+
 /**
  * Attendance with no buttons.
  *
@@ -37,7 +46,7 @@ interface KioskResult extends KioskResponse {
  * drops the stream when the tab is hidden, so a backgrounded tablet does not
  * hold the camera either.
  */
-export default function KioskAttendance() {
+export default function KioskAttendance({ onExit }: KioskAttendanceProps) {
   const [result, setResult] = useState<KioskResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -138,7 +147,7 @@ export default function KioskAttendance() {
           autoCapture
           onFlip={() => setFacing((current) => (current === 'user' ? 'environment' : 'user'))}
           onCapture={(file) => void submit(file)}
-          onClose={() => undefined}
+          onClose={onExit}
         />
 
         {submitting && (
