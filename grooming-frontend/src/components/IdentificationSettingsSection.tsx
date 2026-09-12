@@ -185,38 +185,44 @@ export default function IdentificationSettingsSection() {
           Instructor identification
         </h3>
 
-        {/* Thirty-odd colleges is more than anybody scans to change one, and
-            enrolment is worked through a campus at a time. */}
-        <div className="mt-4 relative max-w-sm">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-          <input
-            type="text"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search colleges…"
-            aria-label="Search colleges"
-            className="w-full pl-9 pr-3 py-2 rounded-md border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-          />
-        </div>
+        {/* One row on a wide screen, stacked on a narrow one. The default-mode
+            control keeps its intrinsic width and the search takes what is left,
+            so the two never compete for space: below the breakpoint each gets a
+            full-width line of its own rather than being crushed together. */}
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap shrink-0">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              Default for all colleges
+            </span>
+            {modeButton(
+              settings.default_mode === 'FACE_ONLY',
+              'Face only',
+              () => setDefaultMode('FACE_ONLY'),
+              savingKey !== null || settings.default_mode === 'FACE_ONLY',
+            )}
+            {modeButton(
+              settings.default_mode === 'SELECTOR',
+              'Selector',
+              () => setDefaultMode('SELECTOR'),
+              savingKey !== null || settings.default_mode === 'SELECTOR',
+            )}
+          </div>
 
-        <div className="mt-4 flex items-center gap-3 flex-wrap">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-            Default for all colleges
-          </span>
-          {modeButton(
-            settings.default_mode === 'FACE_ONLY',
-            'Face only',
-            () => setDefaultMode('FACE_ONLY'),
-            savingKey !== null || settings.default_mode === 'FACE_ONLY',
-          )}
-          {modeButton(
-            settings.default_mode === 'SELECTOR',
-            'Selector',
-            () => setDefaultMode('SELECTOR'),
-            savingKey !== null || settings.default_mode === 'SELECTOR',
-          )}
+          {/* Thirty-odd colleges is more than anybody scans to change one, and
+              enrolment is worked through a campus at a time. Takes the width the
+              mode control leaves, and a full line of its own once stacked. */}
+          <div className="relative flex-1 sm:min-w-[12rem]">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+            <input
+              type="text"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search colleges…"
+              aria-label="Search colleges"
+              className="w-full pl-9 pr-3 py-2 rounded-md border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+            />
+          </div>
         </div>
-
       </div>
 
       <div className="overflow-x-auto">
