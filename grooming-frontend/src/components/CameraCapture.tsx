@@ -28,6 +28,19 @@ interface CameraCaptureProps {
    * tablet may never produce.
    */
   autoCapture?: boolean;
+  /**
+   * Fill the parent box instead of the viewport.
+   *
+   * The kiosk screen is the camera, and it sits inside the app shell where the
+   * sidebar is the way out. Covering the viewport there hid the navigation
+   * behind a black rectangle with no obvious escape. Inline, the surrounding
+   * page stays visible and keeps doing its job, so this mode also drops the
+   * dialog semantics and the close button: nothing is being covered, and there
+   * is nothing to close.
+   *
+   * The parent must establish a positioning context and a size.
+   */
+  inline?: boolean;
 }
 
 /** Failure modes worth telling apart: the fix differs for each. */
@@ -59,6 +72,7 @@ export default function CameraCapture({
   onCapture,
   onClose,
   autoCapture = false,
+  inline = false,
 }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -322,25 +336,35 @@ export default function CameraCapture({
   }, [shoot]);
 
   return (
-    <div className="fixed inset-0 z-[120] bg-black flex flex-col" role="dialog" aria-modal="true" aria-label="Take photo">
+    <div
+      className={inline
+        ? 'absolute inset-0 bg-black flex flex-col'
+        : 'fixed inset-0 z-[120] bg-black flex flex-col'}
+      {...(inline ? {} : { role: 'dialog', 'aria-modal': true, 'aria-label': 'Take photo' })}
+    >
+      {/* Inline, the safe-area inset belongs to the page rather than to this
+          panel, and the title would repeat the heading already above it. Only
+          the camera flip survives, right-aligned on its own. */}
       <div
         className="flex items-center justify-between px-4 py-3 text-white"
-        style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+        style={inline ? undefined : { paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close camera"
-          className="w-11 h-11 rounded-full bg-white/10 active:bg-white/20 flex items-center justify-center"
-        >
-          <X size={22} aria-hidden="true" />
-        </button>
-        <p className="text-sm font-semibold">Take photo</p>
+        {!inline && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close camera"
+            className="w-11 h-11 rounded-full bg-white/10 active:bg-white/20 flex items-center justify-center"
+          >
+            <X size={22} aria-hidden="true" />
+          </button>
+        )}
+        {!inline && <p className="text-sm font-semibold">Take photo</p>}
         <button
           type="button"
           onClick={onFlip}
           aria-label={facing === 'user' ? 'Switch to back camera' : 'Switch to front camera'}
-          className="w-11 h-11 rounded-full bg-white/10 active:bg-white/20 flex items-center justify-center"
+          className={`w-11 h-11 rounded-full bg-white/10 active:bg-white/20 flex items-center justify-center${inline ? ' ml-auto' : ''}`}
         >
           <SwitchCamera size={22} aria-hidden="true" />
         </button>
@@ -438,9 +462,16 @@ export default function CameraCapture({
         )}
       </div>
 
+      {/* Inline the shutter overlays the picture rather than taking a band of
+          its own: the panel is already the smaller part of a page, and under
+          auto-capture the button is usually hidden, so a reserved strip would
+          be empty space most of the time. There is no home indicator to clear
+          inside a panel either, so the safe-area padding goes with it. */}
       <div
-        className="flex flex-col items-center gap-3 py-6"
-        style={{ paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}
+        className={inline
+          ? 'pointer-events-none absolute inset-x-0 bottom-6 flex flex-col items-center gap-3'
+          : 'flex flex-col items-center gap-3 py-6'}
+        style={inline ? undefined : { paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))' }}
       >
         {/* Hidden while auto-capture is working, so nobody presses a button the
             camera is about to press for them. It appears once the strict frame
@@ -452,7 +483,7 @@ export default function CameraCapture({
           hidden={autoCapture && !manualOffered}
           disabled={Boolean(error) || starting || capturing || !ready}
           aria-label={ready ? 'Capture photo' : 'Position one person in the camera to capture a photo'}
-          className="w-[72px] h-[72px] rounded-full bg-white border-4 border-white/40 active:scale-95 transition-transform disabled:opacity-40 flex items-center justify-center"
+          className={`w-[72px] h-[72px] rounded-full bg-white border-4 border-white/40 active:scale-95 transition-transform disabled:opacity-40 flex items-center justify-center${inline ? ' pointer-events-auto shadow-lg' : ''}`}
         >
           {capturing ? (
             <RefreshCw size={26} className="animate-spin text-slate-700" aria-hidden="true" />

@@ -142,39 +142,57 @@ export default function KioskAttendance({ onExit }: KioskAttendanceProps) {
       <div className="relative flex-1 min-h-0 rounded-md overflow-hidden border border-slate-200 bg-black">
         {/* Mounted for the life of this screen: it captures, resets and is ready
             for the next person without anybody reopening it. */}
+        {/* Inline, so the sidebar stays visible and usable: this screen is a
+            panel in the app rather than something covering it. Leaving is
+            navigation like any other, which is why there is no close button —
+            onExit remains for the fullscreen callers of this component. */}
         <CameraCapture
           facing={facing}
           autoCapture
+          inline
           onFlip={() => setFacing((current) => (current === 'user' ? 'environment' : 'user'))}
           onCapture={(file) => void submit(file)}
           onClose={onExit}
         />
 
+        {/* Below the result card rather than beside it. The camera keeps
+            running while a result is on screen, so the common case is the next
+            person being identified while the previous name still shows: at the
+            same height the two would sit on top of each other. */}
         {submitting && (
-          <div className="absolute inset-x-0 top-0 bg-slate-900/80 py-3 text-center" role="status">
+          <div
+            className={`absolute left-3 rounded-full bg-slate-900/80 px-4 py-2 ${result ? 'top-20' : 'top-3'}`}
+            role="status"
+          >
             <p className="text-sm font-bold text-white">Identifying…</p>
           </div>
         )}
 
-        {/* The only confirmation anybody gets, so it covers the frame rather
-            than sitting in a corner, and names the person rather than saying
-            only that something was saved. */}
+        {/* Names the person and what was recorded, over a camera that keeps
+            running: the next instructor can step up while this is still on
+            screen, rather than waiting out a frame that has gone blank.
+
+            Anchored at the top, because the shutter and the framing guidance
+            both live along the bottom edge and a card there would cover the
+            instruction telling somebody why the camera has not fired. */}
         {result && (
           <div
-            className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center ${toneStyles[result.tone]}`}
+            className={`absolute inset-x-3 top-3 flex items-center gap-3 rounded-xl px-4 py-3 shadow-lg ${toneStyles[result.tone]}`}
             role="status"
             aria-live="assertive"
           >
-            <ToneIcon size={56} aria-hidden="true" />
-            <p className="text-3xl font-extrabold">{result.title}</p>
-            {result.detail && (
-              <p className="text-base font-medium opacity-90 max-w-md">{result.detail}</p>
-            )}
-            {!result.recorded && (
-              <p className="text-xs font-bold uppercase tracking-wider opacity-75">
-                Nothing was recorded
-              </p>
-            )}
+            <ToneIcon size={28} className="shrink-0" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-lg font-extrabold leading-tight truncate">{result.title}</p>
+              {result.detail && (
+                <p className="text-xs font-medium opacity-90 mt-0.5 line-clamp-2">{result.detail}</p>
+              )}
+              {!result.recorded && (
+                <p className="text-[10px] font-bold uppercase tracking-wider opacity-75 mt-0.5">
+                  Nothing was recorded
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>
