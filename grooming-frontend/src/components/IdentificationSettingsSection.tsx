@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ListChecks, RotateCcw, ScanFace, TriangleAlert } from 'lucide-react';
+import { ListChecks, RotateCcw, ScanFace } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { apiFetch, apiJson } from '../api';
 import CollegeEnrolmentList from './CollegeEnrolmentList';
@@ -167,8 +167,6 @@ export default function IdentificationSettingsSection() {
     );
   }
 
-  const lowEnrolmentColleges = settings.colleges.filter((college) => college.low_enrolment);
-
   return (
     <div className="bg-white rounded-md shadow-sm border border-slate-200 overflow-hidden">
       <div className="p-6 border-b border-slate-100">
@@ -195,18 +193,6 @@ export default function IdentificationSettingsSection() {
           )}
         </div>
 
-        {lowEnrolmentColleges.length > 0 && (
-          <p className="mt-4 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2.5 flex items-start gap-2">
-            <TriangleAlert size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
-            <span>
-              {lowEnrolmentColleges.length === 1
-                ? '1 college uses face recognition'
-                : `${lowEnrolmentColleges.length} colleges use face recognition`}
-              {' '}with fewer than {settings.low_enrolment_percent}% of instructors enrolled.
-              Check-ins there will mostly need an administrator to attach the instructor.
-            </span>
-          </p>
-        )}
       </div>
 
       <div className="overflow-x-auto">
@@ -261,15 +247,6 @@ export default function IdentificationSettingsSection() {
                     <span className="text-sm font-bold text-slate-700">
                       {college.enrolled}/{college.instructors}
                     </span>
-                    {college.low_enrolment && (
-                      <span
-                        className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-700 font-bold text-[10px] rounded border border-amber-100"
-                        title={`Fewer than ${settings.low_enrolment_percent}% of instructors have a reference photo`}
-                      >
-                        <TriangleAlert size={10} aria-hidden="true" />
-                        {college.enrolled_percent}%
-                      </span>
-                    )}
                   </td>
                   {/* Stops a mode change from also opening the college. */}
                   <td className="p-4 whitespace-nowrap" onClick={(event) => event.stopPropagation()}>
