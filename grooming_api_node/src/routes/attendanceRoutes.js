@@ -679,25 +679,16 @@ attendanceRouter.post(
     // the check-in rather than leave a record pointing at a missing object.
     // `now` is the one declared before recognition ran, so the stored time is
     // when the photograph arrived rather than when the match finished.
-    const photoKey = buildPhotoKey({
-      instructorId: String(instructor._id),
+    const stored = await storeAttendancePhoto({
+      instructorId: instructor._id,
       kind: "checkin",
-      mimeType: normalizedImage.mimeType,
+      normalizedImage,
+      coordinates,
+      accuracyMetres: req.body.location_accuracy_m || "",
       now,
     });
-    const upload = await uploadPhoto({
-      key: photoKey,
-      body: normalizedImage.buffer,
-      mimeType: normalizedImage.mimeType,
-      metadata: {
-        instructor_id: String(instructor._id),
-        kind: "checkin",
-        captured_at: now.toISOString(),
-        coordinates: coordinates || "",
-        accuracy_m: req.body.location_accuracy_m || "",
-      },
-    });
-    if (!upload.stored) {
+    const photoKey = stored.key;
+    if (!stored.stored) {
       return res.status(503).json({
         detail: "Photo storage is unavailable right now. Please try again in a moment.",
       });
@@ -769,6 +760,48 @@ attendanceRouter.post(
     });
   })
 );
+
+/**
+ * Stores one attendance photograph and returns its key.
+ *
+ * The only part of check-in and check-out that is genuinely the same: build a
+ * date-partitioned key, put the normalized bytes in R2, and record who and when
+ * in the object metadata. Everything around it differs deliberately — check-in
+ * refuses when the photo cannot be stored, because the photograph is the
+ * check-in, while check-out proceeds without one because the attendance matters
+ * more than its picture — so only this much is shared.
+ *
+ * Returns { stored: false } rather than throwing, leaving each caller to decide
+ * what a storage failure means for it.
+ */
+async function storeAttendancePhoto({
+  instructorId,
+  kind,
+  normalizedImage,
+  coordinates,
+  accuracyMetres,
+  now,
+}) {
+  const key = buildPhotoKey({
+    instructorId: String(instructorId),
+    kind,
+    mimeType: normalizedImage.mimeType,
+    now,
+  });
+  const upload = await uploadPhoto({
+    key,
+    body: normalizedImage.buffer,
+    mimeType: normalizedImage.mimeType,
+    metadata: {
+      instructor_id: String(instructorId),
+      kind,
+      captured_at: now.toISOString(),
+      coordinates: coordinates || "",
+      accuracy_m: accuracyMetres ?? "",
+    },
+  });
+  return upload.stored ? { stored: true, key } : { stored: false, reason: upload.reason };
+}
 
 /** Guard for queue work: naming a record, and discarding one. */
 async function requireIdentifyPermission(req, res, next) {
@@ -1221,26 +1254,19 @@ attendanceRouter.post(
         // reproduced from the photograph the record keeps.
         const normalized = normalizedCheckoutImage
           || await normalizeInstructorImage(req.file.buffer);
-        const key = buildPhotoKey({
-          instructorId: String(candidate.instructor_id),
+        const stored = await storeAttendancePhoto({
+          instructorId: candidate.instructor_id,
           kind: "checkout",
-          mimeType: normalized.mimeType,
+          normalizedImage: normalized,
+          coordinates: parseCoordinates(req.validatedBody.location_coordinates),
+          accuracyMetres: req.validatedBody.location_accuracy_m,
           now: checkOutTime,
         });
-        const upload = await uploadPhoto({
-          key,
-          body: normalized.buffer,
-          mimeType: normalized.mimeType,
-          metadata: {
-            instructor_id: String(candidate.instructor_id),
-            kind: "checkout",
-            captured_at: checkOutTime.toISOString(),
-            coordinates: parseCoordinates(req.validatedBody.location_coordinates) || "",
-            accuracy_m: req.validatedBody.location_accuracy_m ?? "",
-          },
-        });
-        if (upload.stored) {
-          checkOutPhotoKey = key;
+        // Unlike check-in, a failure here is logged and skipped: the check-out
+        // is what attendance depends on, and refusing it over a photograph
+        // would lose the departure to a storage outage.
+        if (stored.stored) {
+          checkOutPhotoKey = stored.key;
           checkOutPhoto = normalized;
         }
       } catch (error) {

@@ -51,7 +51,9 @@ test("photographed checkout is queued for the worker rather than analysed in the
     "checkout must use today's attendance rather than an older open record"
   );
   assert.ok(
-    checkoutRoute.indexOf("checkoutAvailability(candidate") < checkoutRoute.indexOf("uploadPhoto("),
+    // storeAttendancePhoto is the shared helper both halves now use to put an
+    // attendance photograph in R2; the literal uploadPhoto call moved inside it.
+    checkoutRoute.indexOf("checkoutAvailability(candidate") < checkoutRoute.indexOf("storeAttendancePhoto("),
     "a duplicate checkout must be refused before its photo is stored"
   );
 });
@@ -75,7 +77,7 @@ test("face identification decodes the photo before the record is known, and only
   const identifyDecode = checkoutRoute.indexOf("normalizedCheckoutImage = await normalizeInstructorImage");
   const searchAt = checkoutRoute.indexOf("searchFaceByImage(");
   const availabilityAt = checkoutRoute.indexOf("checkoutAvailability(candidate");
-  const storeAt = checkoutRoute.indexOf("uploadPhoto(");
+  const storeAt = checkoutRoute.indexOf("storeAttendancePhoto(");
 
   assert.ok(identifyDecode >= 0, "face identification must normalize the upload");
   assert.ok(searchAt > identifyDecode, "the match runs on the normalized image");
