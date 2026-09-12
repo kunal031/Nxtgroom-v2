@@ -553,7 +553,10 @@ async function loadPreflightRows(db) {
     ).toArray(),
     db.collection("attendance").find(
       { check_out_time: null },
-      { projection: { _id: 1, instructor_id: 1, attendance_day: 1, check_in_time: 1 } }
+      // status is read so an unidentified check-in can be told apart from a
+      // record whose instructor reference is genuinely broken. Both have no
+      // usable instructor_id; only one of them is a fault.
+      { projection: { _id: 1, instructor_id: 1, attendance_day: 1, check_in_time: 1, status: 1 } }
     ).toArray(),
     db.collection("evaluations").find(
       {},
@@ -747,8 +750,24 @@ export async function auditDatabasePreflight(db, { now = new Date() } = {}) {
     ));
   }
 
+  /**
+   * An open attendance whose instructor reference cannot be resolved.
+   *
+   * A photo-first check-in nobody could be recognised from is written with
+   * instructor_id: null and status "unidentified", deliberately: the record is
+   * the evidence somebody turned up, and an administrator names them later from
+   * the unidentified queue. Those rows are not damage, and treating them as
+   * damage stopped the API booting at all — every deployment carrying
+   * photo-first check-in refused to start as soon as one unrecognised person
+   * had been photographed.
+   *
+   * Anything else with no usable instructor_id is still a genuine fault: a
+   * reference that was corrupted, blanked or written with the wrong type, which
+   * nothing in the product creates on purpose.
+   */
   const attendanceWithoutInstructor = activeAttendances.filter((row) => (
     referenceKey(row.instructor_id) == null
+    && !(row.status === "unidentified" && row.instructor_id === null)
   ));
   if (attendanceWithoutInstructor.length) {
     findings.push(finding(

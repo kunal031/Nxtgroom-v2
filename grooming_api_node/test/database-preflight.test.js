@@ -387,3 +387,89 @@ test("active attendance requires an active instructor and accepts string/ObjectI
   );
   assert.equal(db.createCalls.length, 0);
 });
+
+/**
+ * An unrecognised check-in is a record the product writes on purpose.
+ *
+ * Photo-first check-in stores somebody it could not identify with
+ * instructor_id: null and status "unidentified", so the evidence that they
+ * turned up survives until an administrator names them. Read as damage, that
+ * shape stopped the API booting: the preflight blocks startup on any finding,
+ * so one unrecognised person anywhere in the database took the whole service
+ * down and every redeploy failed the same way.
+ *
+ * The distinction is narrow on purpose. Only the exact shape the check-in path
+ * writes is accepted; a missing, blanked or wrongly typed reference on any
+ * other record is still a fault nothing creates deliberately, and is still
+ * reported.
+ */
+test("an unidentified check-in is not a broken instructor reference", async () => {
+  const db = preflightDb({
+    users: [{ _id: "user-1", email: "admin@example.com" }],
+    colleges: [{ _id: "college-1", name: "Campus", location: "Hyderabad" }],
+    instructors: [
+      {
+        _id: "instructor-1",
+        employee_id: "INST-1",
+        college_id: "college-1",
+        email: "instructor@example.com",
+      },
+    ],
+    attendance: [
+      // Written by the kiosk when Rekognition matched nobody.
+      { _id: "attendance-unidentified", instructor_id: null, status: "unidentified" },
+      // Several in one day is normal: each is a different person nobody named.
+      { _id: "attendance-unidentified-2", instructor_id: null, status: "unidentified" },
+      // Genuinely broken, and still reported: no status explains the missing id.
+      { _id: "attendance-null-id", instructor_id: null },
+      // Also broken: the right status cannot excuse a corrupted reference type.
+      { _id: "attendance-bad-type", instructor_id: 42, status: "unidentified" },
+      { _id: "attendance-blank-id", instructor_id: "   ", status: "pending" },
+    ],
+  });
+
+  const report = await auditDatabasePreflight(db);
+  const finding = report.findings.find(
+    (item) => item.code === "ACTIVE_ATTENDANCE_INSTRUCTOR_INVALID"
+  );
+
+  assert.equal(finding.affected_records, 3, "only the genuinely broken rows are reported");
+  assert.deepEqual(
+    finding.examples.map((example) => example.attendance_id),
+    ["attendance-null-id", "attendance-bad-type", "attendance-blank-id"]
+  );
+});
+
+/**
+ * The case that took production down, start to finish.
+ *
+ * Nothing else was wrong with the database: one person stood in front of a
+ * tablet, was not recognised, and the API would not start again until the
+ * record was removed by hand. A preflight that blocks on this is worse than no
+ * preflight, because it converts ordinary use into an outage.
+ */
+test("a database whose only oddity is an unidentified check-in still starts", async () => {
+  const db = preflightDb({
+    users: [{ _id: "user-1", email: "admin@example.com" }],
+    colleges: [{ _id: "college-1", name: "Campus", location: "Hyderabad" }],
+    instructors: [
+      {
+        _id: "instructor-1",
+        employee_id: "INST-1",
+        college_id: "college-1",
+        email: "instructor@example.com",
+      },
+    ],
+    attendance: [
+      { _id: "attendance-unidentified", instructor_id: null, status: "unidentified" },
+    ],
+  });
+
+  const report = await auditDatabasePreflight(db);
+  assert.equal(
+    report.findings.some((item) => item.code === "ACTIVE_ATTENDANCE_INSTRUCTOR_INVALID"),
+    false,
+    "an unrecognised check-in must never block startup"
+  );
+  assert.equal(report.findings.length, 0);
+});
