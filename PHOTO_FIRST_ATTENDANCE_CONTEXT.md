@@ -168,30 +168,18 @@ All green. Safe to commit as-is.
 
 ---
 
-## What is NOT built — the next task
+## The code is complete
 
-**1. `POST /api/v2/attendance/auto`** — the kiosk endpoint.
-Recognise the face → `decideKioskAction` → branch to `commitGuardedCheckIn`,
-the check-out update, or `commitUnidentifiedCheckIn` → queue the evaluation →
-return the instructor's name and which action happened.
+`POST /api/v2/attendance/auto` and `KioskAttendance.tsx` are built, tested and
+committed (`e7ddc4d`). A face-only college's Attendance screen is now a camera:
+capture → identify → popup naming the person → reset, with no buttons and no
+review step. A college still in SELECTOR mode keeps the old card.
 
-Register it **beside `/check-in` (around line 513)**, not at the end of the
-file: a literal path must precede `/:attendanceId/...` routes or Express will
-treat "auto" as an attendance id. This exact bug was caught twice in this work.
+The camera belongs to the screen, not the tablet — it opens when a BOA opens
+Attendance and releases when they leave.
 
-Reuse `storeAttendancePhoto(...)` (already extracted) rather than writing a
-third copy of the upload convention.
-
-**2. The kiosk screen** — auto-capture, result popup naming the person,
-auto-reset for the next person. No buttons, no photo preview, no review step.
-Replaces `EvaluateCard` for face-only colleges.
-
-The camera is **not** permanently open on the tablet. It opens when the BOA
-opens the Attendance screen, stays live for as long as that screen is open —
-capture, popup, reset, ready for the next person — and releases when they
-navigate away. The existing `visibilitychange` handler already releases the
-stream when the tab is hidden, so a backgrounded tablet does not hold the
-camera.
+Nothing further is required in code to run photo-first attendance. What remains
+is operational, and is listed below.
 
 **Note:** I agreed to a "thin dispatcher" refactor, then narrowed it to
 extracting only the photo-storage helper, because check-in and check-out differ
