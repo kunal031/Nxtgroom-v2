@@ -47,6 +47,11 @@ import {
   checkoutTiming,
   describeCheckoutTiming,
 } from "../services/checkoutTiming.js";
+import {
+  decideKioskAction,
+  describeKioskAction,
+  KIOSK_ACTIONS,
+} from "../services/kioskAction.js";
 import { attachAddressToAttendance } from "../services/geocoding.js";
 import {
   asyncRoute,
@@ -509,6 +514,268 @@ export function serializeAttendance(attendance) {
   );
   return serializeDocument(publicAttendance);
 }
+
+/**
+ * One photograph, and the system decides what it means.
+ *
+ * The attendance screen has no buttons: somebody stands in front of the tablet,
+ * the camera photographs them, and this works out whether it is their arrival or
+ * their departure. Registered before every "/:attendanceId/..." route, because
+ * a literal path declared after one of those is read as an attendance id.
+ *
+ * Nothing here invents a rule. The identity comes from the same face search
+ * check-in uses, the arrival is committed by the same guarded transaction, and
+ * the departure applies the same timing rules — this route only chooses between
+ * them, which is the part a person used to do by pressing a button.
+ */
+attendanceRouter.post(
+  "/auto",
+  checkInLimiter,
+  checkInConcurrencyGate,
+  upload.single("file"),
+  asyncRoute(async (req, res) => {
+    const validation = validateImageUpload(req.file);
+    if (!validation.valid) return res.status(400).json({ detail: validation.detail });
+
+    const db = req.app.locals.db;
+    const now = new Date();
+
+    if (!isFaceRecognitionConfigured()) {
+      return res.status(503).json({
+        detail: "Face recognition is not available right now, so nobody can be identified.",
+        action: KIOSK_ACTIONS.UNIDENTIFIED,
+      });
+    }
+
+    const coordinates = parseCoordinates(req.body.location_coordinates);
+    if (req.body.location_coordinates && !coordinates) {
+      return res.status(422).json({ detail: "location_coordinates must be valid latitude,longitude" });
+    }
+    const accuracyMetres = Number.parseInt(req.body.location_accuracy_m, 10) || null;
+
+    // Normalized once. The same buffer is recognised, stored and analysed, so a
+    // refused or mistaken match can be reproduced from the photograph the record
+    // keeps rather than from a second encoding of it.
+    let normalizedImage;
+    try {
+      normalizedImage = await normalizeInstructorImage(req.file.buffer);
+    } catch {
+      return res.status(400).json({
+        detail: "Image could not be decoded; take a clear photo and try again",
+      });
+    }
+
+    const match = await searchFaceByImage(normalizedImage.buffer);
+    const instructor = match.ok
+      ? await db.collection("instructors").findOne(
+          activeInstructorFilter(req.currentUser, String(match.instructorId))
+        )
+      : null;
+
+    // A face that matched somebody this tablet cannot see is treated as no
+    // match: the college scope is what stops one campus recording another's
+    // attendance, and it must not be bypassed by a recognition result.
+    const today = instructor
+      ? await db.collection("attendance").findOne(attendanceOnLocalDay(instructor._id, now))
+      : null;
+    const action = decideKioskAction({
+      matched: Boolean(instructor),
+      availability: checkoutAvailability(today, now),
+    });
+
+    /** Nothing is recorded, so nothing is stored: the photo is simply dropped. */
+    if (action === KIOSK_ACTIONS.TOO_EARLY || action === KIOSK_ACTIONS.ALREADY_DONE) {
+      const timing = checkoutTiming(today?.check_in_time, { now });
+      const opensAtLabel = timing.opens_at
+        ? new Intl.DateTimeFormat("en-IN", {
+            timeZone: runtimeConfig().appTimeZone,
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+          }).format(timing.opens_at)
+        : null;
+      return res.status(200).json({
+        action,
+        recorded: false,
+        instructor_name: instructor?.name || null,
+        attendance_id: today ? String(today._id) : null,
+        ...describeKioskAction(action, {
+          instructorName: instructor?.name,
+          opensAtLabel: action === KIOSK_ACTIONS.TOO_EARLY ? opensAtLabel : null,
+          minutesRemaining: timing.minutes_remaining,
+        }),
+      });
+    }
+
+    const stored = await storeAttendancePhoto({
+      instructorId: instructor?._id || "unidentified",
+      kind: action === KIOSK_ACTIONS.CHECK_OUT ? "checkout" : "checkin",
+      normalizedImage,
+      coordinates,
+      accuracyMetres: req.body.location_accuracy_m || "",
+      now,
+    });
+    if (!stored.stored) {
+      return res.status(503).json({
+        detail: "Photo storage is unavailable right now. Please try again in a moment.",
+      });
+    }
+
+    /**
+     * Nobody matched, so this is recorded as an arrival for an administrator to
+     * name. A departure cannot be: it closes one specific open session, and
+     * there is no way to tell which.
+     */
+    if (action === KIOSK_ACTIONS.UNIDENTIFIED) {
+      const unidentified = await commitUnidentifiedCheckIn(db, {
+        currentUser: req.currentUser,
+        coordinates,
+        normalizedImage,
+        photoKey: stored.key,
+        locationAccuracyM: accuracyMetres,
+        capturedAt: now,
+        recognition: { reason: match.reason, bestSimilarity: null, candidateInstructorId: null },
+        now,
+      });
+      if (coordinates) void attachAddressToAttendance(db, unidentified.attendance._id, coordinates);
+      incrementMetric("kiosk_unidentified_total");
+      return res.status(202).json({
+        action,
+        recorded: true,
+        instructor_name: null,
+        attendance_id: String(unidentified.attendance._id),
+        ...describeKioskAction(action, {}),
+      });
+    }
+
+    const identification = {
+      method: "FACE",
+      outcome: "MATCHED",
+      similarity: match.similarity,
+      face_id: match.faceId,
+      runner_up_instructor_id: match.runnerUp?.instructorId || null,
+      runner_up_similarity: match.runnerUp?.similarity ?? null,
+      attempted_at: now,
+    };
+
+    if (action === KIOSK_ACTIONS.CHECK_IN) {
+      let committed;
+      try {
+        committed = await commitGuardedCheckIn(db, {
+          currentUser: req.currentUser,
+          instructorId: String(instructor._id),
+          coordinates,
+          normalizedImage,
+          photoKey: stored.key,
+          locationAccuracyM: accuracyMetres,
+          capturedAt: now,
+          identification,
+          now,
+        });
+      } catch (error) {
+        await compensateUploadedPhoto(db, stored.key, "kiosk_checkin_commit_failed");
+        if (error.code === 11000) {
+          return res.status(409).json({
+            detail: "This instructor has already checked in today",
+            attendance_id: await attendanceIdForToday(db, instructor._id),
+          });
+        }
+        throw error;
+      }
+      if (committed.outcome !== "created") {
+        // invalid_email and the duplicate guard both land here. The photo has an
+        // owner only when a record was written, so it is discarded otherwise.
+        await compensateUploadedPhoto(db, stored.key, `kiosk_${committed.outcome}`);
+        return res.status(committed.outcome === "invalid_email" ? 422 : 409).json({
+          detail: committed.outcome === "invalid_email"
+            ? "This instructor needs a valid email address before check-in reports can be sent."
+            : "This instructor has already checked in today",
+        });
+      }
+
+      const { attendance, evaluationPayload } = committed;
+      try {
+        await enqueueEvaluation(db, {
+          attendanceId: attendance._id,
+          instructor: evaluationPayload.instructor,
+          photoKey: evaluationPayload.photo_key,
+          mimeType: evaluationPayload.mime_type,
+          checkInTime: evaluationPayload.check_in_time,
+          deadlineAt: evaluationPayload.deadline_at,
+        });
+      } catch (error) {
+        console.error(`Kiosk evaluation outbox ${attendance._id} remains pending (${error.name || "ERROR"})`);
+      }
+      if (coordinates) void attachAddressToAttendance(db, attendance._id, coordinates);
+      incrementMetric("kiosk_checkin_total");
+      return res.status(202).json({
+        action,
+        recorded: true,
+        instructor_name: instructor.name,
+        attendance_id: String(attendance._id),
+        ...describeKioskAction(action, { instructorName: instructor.name }),
+      });
+    }
+
+    // CHECK_OUT. Guarded on check_out_time so two photographs taken moments
+    // apart cannot both close the same session.
+    const recipient = isValidEmail(instructor.email) ? instructor.email : null;
+    const result = await db.collection("attendance").findOneAndUpdate(
+      { _id: today._id, check_out_time: null, ...attendanceScope(req.currentUser) },
+      {
+        $set: {
+          check_out_time: now,
+          check_out_photo_key: stored.key,
+          check_out_photo_captured_at: now,
+          ...(coordinates ? { check_out_coordinates: coordinates } : {}),
+          ...(accuracyMetres != null ? { check_out_location_accuracy_m: accuracyMetres } : {}),
+          checkout_identification: identification,
+          checkout_evaluation_queue_status: "processing",
+          checkout_email_status: recipient ? "waiting_for_analysis" : "skipped_no_email",
+          updated_at: now,
+        },
+      },
+      { returnDocument: "after" }
+    );
+    const attendance = result?.value || result;
+    if (!attendance) {
+      await compensateUploadedPhoto(db, stored.key, "kiosk_duplicate_checkout");
+      return res.status(409).json({
+        detail: "This instructor has already checked out today",
+        attendance_id: String(today._id),
+      });
+    }
+
+    try {
+      await enqueueEvaluation(db, {
+        attendanceId: attendance._id,
+        kind: "checkout",
+        instructor: {
+          id: String(instructor._id),
+          name: instructor.name,
+          email: recipient || instructor.email || null,
+          gender: instructor.gender || null,
+          collegeId: instructor.college_id ? String(instructor.college_id) : null,
+        },
+        photoKey: stored.key,
+        mimeType: normalizedImage.mimeType,
+        checkInTime: attendance.check_in_time,
+        checkOutTime: now,
+      });
+    } catch (error) {
+      console.error(`Kiosk checkout evaluation not queued for ${attendance._id} (${error?.name || "ERROR"})`);
+    }
+    if (coordinates) void attachAddressToAttendance(db, attendance._id, coordinates, "checkout");
+    incrementMetric("kiosk_checkout_total");
+    return res.status(202).json({
+      action,
+      recorded: true,
+      instructor_name: instructor.name,
+      attendance_id: String(attendance._id),
+      ...describeKioskAction(action, { instructorName: instructor.name }),
+    });
+  })
+);
 
 attendanceRouter.post(
   "/check-in",

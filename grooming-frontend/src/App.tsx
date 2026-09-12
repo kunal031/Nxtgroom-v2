@@ -37,6 +37,7 @@ const UserManagement = lazy(() => import('./components/UserManagement'));
 const SettingsPage = lazy(() => import('./components/SettingsPage'));
 const InstructorManagement = lazy(() => import('./components/InstructorManagement'));
 const UnidentifiedQueue = lazy(() => import('./components/UnidentifiedQueue'));
+const KioskAttendance = lazy(() => import('./components/KioskAttendance'));
 
 interface SessionState {
   token: string | null;
@@ -358,7 +359,16 @@ export default function App() {
 
         <div className="flex flex-col xl:flex-row gap-6 items-start flex-1 min-h-0 w-full">
           <Suspense fallback={<div className="w-full"><BrandedLoader label="Loading screen" /></div>}>
-          {activeTab === 'overview' && (
+          {/* A face-only college has no selector and no buttons: the camera is
+              the whole screen. Everywhere else keeps the card, which is still
+              how a college mid-enrolment records attendance. */}
+          {activeTab === 'overview' && session.faceIdentification && (
+            <div className="w-full h-full">
+              <KioskAttendance />
+            </div>
+          )}
+
+          {activeTab === 'overview' && !session.faceIdentification && (
             <div className="w-full h-full flex justify-center items-start pt-10">
               <div className="w-full max-w-2xl shrink-0">
                 <EvaluateCard
