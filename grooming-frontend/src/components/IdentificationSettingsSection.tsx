@@ -225,8 +225,13 @@ export default function IdentificationSettingsSection() {
         </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse table-fixed">
+      {/* table-fixed with percentage columns is defined as exactly the width of
+          its container, so on a phone it never overflowed — it compressed four
+          columns into 360px instead, and the wrapper had nothing to scroll. The
+          minimum gives the percentages something real to divide, and below it
+          the wrapper finally does its job. */}
+      <div className="overflow-x-auto overscroll-x-contain">
+        <table className="w-full min-w-[36rem] text-left border-collapse table-fixed">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
               {/* Fixed widths so a long college name truncates on one line

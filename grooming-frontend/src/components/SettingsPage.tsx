@@ -149,8 +149,11 @@ function NotificationSettings() {
       )}
 
       <div className="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
+        {/* gap-6 next to a 44px switch left barely 290px for a paragraph on a
+            phone. Three is enough to separate them and gives the sentence back
+            the room it needs. */}
         {TOGGLES.map((toggle) => (
-          <div key={toggle.key} className="flex items-start justify-between gap-6 p-4">
+          <div key={toggle.key} className="flex items-start justify-between gap-3 sm:gap-6 p-4">
             <div className="min-w-0">
               <label htmlFor={toggle.key} className="block text-sm font-semibold text-slate-800">
                 {toggle.label}
@@ -181,7 +184,7 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<'notifications' | 'identification' | 'colleges' | 'sync' | 'rp'>('notifications');
 
   const tabClass = (value: string) =>
-    `px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
+    `px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${
       tab === value
         ? 'border-indigo-600 text-indigo-700'
         : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -194,8 +197,17 @@ export default function SettingsPage() {
         <p className="text-sm text-slate-500 mt-1">Manage notifications, identification, institutes, data sync and reporting partners.</p>
       </div>
 
-      <div className="border-b border-slate-200 mb-6 shrink-0" role="tablist" aria-label="Settings sections">
-        <div className="flex gap-2">
+      {/* Scrolls sideways rather than compressing. Five tabs need more width
+          than a phone has, and a flex row without this squeezed every label
+          until the strip was unreadable and unhittable. overflow-x-auto keeps
+          them full size and lets the strip be swiped; the tabs themselves stop
+          shrinking so a long label cannot be crushed by a neighbour. */}
+      <div
+        className="border-b border-slate-200 mb-6 shrink-0 overflow-x-auto overscroll-x-contain"
+        role="tablist"
+        aria-label="Settings sections"
+      >
+        <div className="flex gap-2 w-max min-w-full [&>button]:shrink-0">
           <button
             type="button"
             role="tab"

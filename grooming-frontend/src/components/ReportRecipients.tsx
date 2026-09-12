@@ -181,7 +181,7 @@ export default function ReportRecipients() {
       <EventToggles />
 
       <form onSubmit={handleAdd} className="mb-5 flex flex-wrap items-start gap-2">
-        <div className="relative min-w-[16rem] flex-1">
+        <div className="relative basis-full sm:basis-auto sm:min-w-[16rem] flex-1">
           <Mail size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
           <input
             type="email"

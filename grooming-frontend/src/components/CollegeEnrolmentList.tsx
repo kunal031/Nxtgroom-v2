@@ -240,7 +240,7 @@ export default function CollegeEnrolmentList({
           {filterButton('needs_photo', 'Needs photo', collegeInstructors.length - enrolledCount)}
           {filterButton('enrolled', 'Enrolled', enrolledCount)}
           {filterButton('all', 'All', collegeInstructors.length)}
-          <div className="relative flex-1 min-w-[12rem]">
+          <div className="relative flex-1 basis-full sm:basis-auto sm:min-w-[12rem]">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
             <input
               type="text"
@@ -259,8 +259,11 @@ export default function CollegeEnrolmentList({
         )}
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse table-fixed">
+      {/* See IdentificationSettingsSection: table-fixed at w-full cannot
+          overflow, so without a minimum the columns crush on a phone rather
+          than the wrapper scrolling. */}
+      <div className="overflow-x-auto overscroll-x-contain">
+        <table className="w-full min-w-[34rem] text-left border-collapse table-fixed">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
               {/* Fixed widths so a long name truncates on one line instead of

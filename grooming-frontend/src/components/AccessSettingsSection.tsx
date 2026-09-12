@@ -69,7 +69,9 @@ export default function AccessSettingsSection() {
         Permissions
       </h3>
       <div className="bg-white border border-slate-200 rounded-md">
-        <div className="flex items-start justify-between gap-6 p-4">
+        {/* Narrower gap on a phone: these descriptions are two and three lines
+            long, and 24px beside a fixed-width switch came out of the text. */}
+        <div className="flex items-start justify-between gap-3 sm:gap-6 p-4">
           <div className="min-w-0">
             <label htmlFor="boa_can_delete_records" className="block text-sm font-semibold text-slate-800">
               Let BOAs delete a whole attendance record
@@ -86,7 +88,7 @@ export default function AccessSettingsSection() {
             onChange={(value) => void update('boa_can_delete_records', value)}
           />
         </div>
-        <div className="flex items-start justify-between gap-6 border-t border-slate-100 p-4">
+        <div className="flex items-start justify-between gap-3 sm:gap-6 border-t border-slate-100 p-4">
           <div className="min-w-0">
             <label htmlFor="boa_can_delete_checkout" className="block text-sm font-semibold text-slate-800">
               Let BOAs delete a check-out on its own
@@ -107,7 +109,7 @@ export default function AccessSettingsSection() {
         {/* Independent of the delete permissions above, and not implied by
             them: a BOA is often the only person who can recognise a face from
             their own campus, yet need never be able to destroy a record. */}
-        <div className="flex items-start justify-between gap-6 border-t border-slate-100 p-4">
+        <div className="flex items-start justify-between gap-3 sm:gap-6 border-t border-slate-100 p-4">
           <div className="min-w-0">
             <label htmlFor="boa_can_identify" className="block text-sm font-semibold text-slate-800">
               Let BOAs name an unidentified check-in
