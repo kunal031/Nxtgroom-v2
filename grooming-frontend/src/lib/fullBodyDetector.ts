@@ -40,11 +40,20 @@ const KEYPOINT_CONFIDENCE = 0.35;
 import { coverSourceRect } from './cameraGeometry.ts';
 
 /**
- * Nose-to-ankle distance is slightly shorter than the person's true height.
- * At 72% of the image it corresponds to a roughly 80-90% tall person while
- * retaining a safe margin above the hair and below the shoes.
+ * Retained for callers compiled against the earlier distance gate.
+ *
+ * Auto-capture no longer measures how much of the frame a person fills. Head
+ * and both ankles already prove the whole body is in shot, which is the thing
+ * the grooming report needs; a span requirement on top of that asked them to
+ * stand within a narrow band of distances as well. The two conditions could
+ * exclude each other outright — close enough to fill 72% of the frame put the
+ * feet below a chest-height camera's view, and far enough back for the feet to
+ * appear dropped the span under the threshold — so on many mountings no
+ * position satisfied both and the camera never fired.
+ *
+ * Restore the check in readKeypoints if a minimum subject size is ever wanted.
  */
-export const MIN_BODY_SPAN_RATIO = 0.72;
+export const MIN_BODY_SPAN_RATIO = 0;
 /** MoveNet's ankle and head keypoints, by the names the model returns. */
 const HEAD_KEYPOINTS = ['nose', 'left_eye', 'right_eye'];
 const ANKLE_KEYPOINTS = ['left_ankle', 'right_ankle'];
@@ -145,29 +154,9 @@ export function readKeypoints(
     return { verdict: 'NO_PERSON', guidance: 'Step into the frame' };
   }
   if (headVisible && anklesVisible) {
-    const visibleHead = keypoints.filter((point) => (
-      point.name != null
-      && HEAD_KEYPOINTS.includes(point.name)
-      && (point.score ?? 0) >= KEYPOINT_CONFIDENCE
-      && Number.isFinite(point.y)
-    ));
-    const visibleAnkles = keypoints.filter((point) => (
-      point.name != null
-      && ANKLE_KEYPOINTS.includes(point.name)
-      && (point.score ?? 0) >= KEYPOINT_CONFIDENCE
-      && Number.isFinite(point.y)
-    ));
-    if (frameHeight && visibleHead.length && visibleAnkles.length) {
-      const headY = Math.min(...visibleHead.map((point) => point.y as number));
-      const ankleY = Math.max(...visibleAnkles.map((point) => point.y as number));
-      if ((ankleY - headY) / frameHeight < MIN_BODY_SPAN_RATIO) {
-        return {
-          verdict: 'TOO_FAR',
-          guidance: 'Move closer - fill the guide from head to feet',
-          poseSignals: poseSignals(keypoints, frameHeight),
-        };
-      }
-    }
+    // Head and both ankles in frame is the whole test: that is a full-body
+    // photograph, whatever proportion of the frame it occupies. How far back
+    // the person stands is left to them and to where the camera is mounted.
     return {
       verdict: 'FULL_BODY',
       guidance: null,

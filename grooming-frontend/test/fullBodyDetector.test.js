@@ -40,14 +40,22 @@ test('one ankle is not a full-body photograph', () => {
   assert.match(readKeypoints(oneFoot).guidance, /step back/i);
 });
 
-test('a distant whole person is asked to fill more of the frame', () => {
+test('a distant whole person is still a whole person', () => {
+  // Half the height of the framed subject, which the previous span gate called
+  // TOO_FAR. Head and both ankles are in shot, so the photograph shows
+  // everything the grooming report judges, and the camera fires.
+  //
+  // The gate was removed because it could contradict the ankle requirement:
+  // close enough to fill the frame put the feet below a chest-height camera,
+  // far enough back for the feet to appear dropped the span under the
+  // threshold, and on many mountings no distance satisfied both.
   const distant = framedPerson.map((keypoint) => ({
     ...keypoint,
     y: 300 + ((keypoint.y - 80) * 0.5),
   }));
-  assert.equal(readKeypoints(distant, 1000).verdict, 'TOO_FAR');
-  assert.match(readKeypoints(distant, 1000).guidance, /move closer/i);
-  assert.ok(MIN_BODY_SPAN_RATIO >= 0.65);
+  assert.equal(readKeypoints(distant, 1000).verdict, 'FULL_BODY');
+  assert.equal(readKeypoints(distant, 1000).guidance, null);
+  assert.equal(MIN_BODY_SPAN_RATIO, 0, 'no minimum subject size is enforced');
 });
 
 test('a large head-to-feet subject is ready', () => {
