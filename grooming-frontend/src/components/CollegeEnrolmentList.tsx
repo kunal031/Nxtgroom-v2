@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Check, Search, Upload, UserCircle2 } from 'lucide-react';
+import { ArrowLeft, Image as ImageIcon, ImageOff, RefreshCcwDot, RefreshCw, Search, Upload, X } from 'lucide-react';
 import { apiFetch, apiFetchAllPages, invalidateCache } from '../api';
 import { preparePhoto } from '../lib/imageCapture';
 import { validatePhoto, validateSourcePhoto } from '../imageValidation';
@@ -42,6 +42,10 @@ export default function CollegeEnrolmentList({
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<EnrolmentFilter>('needs_photo');
   const [busyId, setBusyId] = useState<string | null>(null);
+  /** Whose reference photo is open, or null. */
+  const [photoFor, setPhotoFor] = useState<Instructor | null>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState('');
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const toast = useToast();
 
@@ -169,6 +173,36 @@ export default function CollegeEnrolmentList({
     }
   };
 
+  /**
+   * Fetches the reference photo when one is opened.
+   *
+   * Not PhotoViewer: that component reads `url` from its endpoint, while the
+   * face endpoint returns `photo_url` alongside the enrolment counts. Rather
+   * than change a committed route's response shape for one caller, the link is
+   * fetched here — the bucket is private, so it is minted per view and expires.
+   */
+  useEffect(() => {
+    if (!photoFor) return undefined;
+    const controller = new AbortController();
+    setPhotoUrl(null);
+    setPhotoError('');
+    apiFetch<{ photo_url: string | null }>(
+      `/api/v2/instructors/${encodeURIComponent(photoFor._id)}/face`,
+      { signal: controller.signal },
+    )
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        if (data?.photo_url) setPhotoUrl(data.photo_url);
+        else setPhotoError('The reference photo is no longer available.');
+      })
+      .catch((requestError) => {
+        if (controller.signal.aborted) return;
+        if ((requestError as { status?: number })?.status === 401) return;
+        setPhotoError('The reference photo could not be loaded.');
+      });
+    return () => controller.abort();
+  }, [photoFor]);
+
   const filterButton = (value: EnrolmentFilter, label: string, count: number) => (
     <button
       type="button"
@@ -225,20 +259,23 @@ export default function CollegeEnrolmentList({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse">
+        <table className="w-full text-left border-collapse table-fixed">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
-              <th className="p-4">Instructor</th>
-              <th className="p-4">Reference photo</th>
-              <th className="p-4 text-right">Action</th>
+              {/* Fixed widths so a long name truncates on one line instead of
+                  wrapping and doubling its row's height. */}
+              <th className="p-4 w-[45%]">Instructor</th>
+              <th className="p-4 w-[25%]">Role</th>
+              <th className="p-4 w-[15%]">Reference image</th>
+              <th className="p-4 w-[15%] text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td colSpan={3} className="p-8 text-center text-slate-400 font-medium">Loading instructors…</td></tr>
+              <tr><td colSpan={4} className="p-8 text-center text-slate-400 font-medium">Loading instructors…</td></tr>
             ) : visible.length === 0 ? (
               <tr>
-                <td colSpan={3} className="p-8 text-center text-slate-400 font-medium">
+                <td colSpan={4} className="p-8 text-center text-slate-400 font-medium">
                   {filter === 'needs_photo' && collegeInstructors.length > 0
                     ? 'Every instructor at this college has a reference photo.'
                     : 'No instructors found.'}
@@ -250,26 +287,39 @@ export default function CollegeEnrolmentList({
                 const busy = busyId === instructor._id;
                 return (
                   <tr key={instructor._id} className="hover:bg-slate-50 transition-colors">
-                    <td className="p-4">
-                      <span className="font-bold text-slate-800">{instructor.name}</span>
-                      <span className="block text-[11px] text-slate-400 font-medium mt-0.5">
-                        {instructor.instructor_role || instructor.role || '--'}
-                      </span>
+                    <td className="p-4 font-bold text-slate-800 truncate" title={instructor.name}>
+                      {instructor.name}
                     </td>
-                    <td className="p-4">
+                    <td
+                      className="p-4 text-sm font-medium text-slate-500 truncate"
+                      title={instructor.instructor_role || instructor.role || ''}
+                    >
+                      {instructor.instructor_role || instructor.role || '--'}
+                    </td>
+                    <td className="p-4 whitespace-nowrap">
                       {enrolled ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-[11px] rounded-md border border-emerald-100">
-                          <Check size={12} aria-hidden="true" />
-                          {instructor.face_count} enrolled
-                        </span>
+                        // The photo itself is the useful thing, so the cell is
+                        // the way to open it rather than a badge describing it.
+                        <button
+                          type="button"
+                          onClick={() => setPhotoFor(instructor)}
+                          title={`View ${instructor.name}'s reference photo`}
+                          aria-label={`View ${instructor.name}'s reference photo`}
+                          className="w-8 h-8 rounded-md flex items-center justify-center text-emerald-700 bg-emerald-50 border border-emerald-100 hover:bg-emerald-100 transition-colors"
+                        >
+                          <ImageIcon size={15} aria-hidden="true" />
+                        </button>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 text-amber-700 font-bold text-[11px] rounded-md border border-amber-100">
-                          <UserCircle2 size={12} aria-hidden="true" />
-                          No photo
+                        <span
+                          title="No reference photo — this instructor cannot be recognised"
+                          aria-label="No reference photo"
+                          className="w-8 h-8 rounded-md flex items-center justify-center text-slate-400 bg-slate-50 border border-slate-200"
+                        >
+                          <X size={15} aria-hidden="true" />
                         </span>
                       )}
                     </td>
-                    <td className="p-4 text-right">
+                    <td className="p-4 text-right whitespace-nowrap">
                       <input
                         ref={(element) => { fileInputs.current[instructor._id] = element; }}
                         type="file"
@@ -281,14 +331,27 @@ export default function CollegeEnrolmentList({
                           if (file) void upload(instructor, file);
                         }}
                       />
+                      {/* Two different icons, because the two actions are not
+                          the same: adding a first reference is what makes
+                          somebody recognisable, while adding another only
+                          improves a face that already works. */}
                       <button
                         type="button"
                         onClick={() => fileInputs.current[instructor._id]?.click()}
                         disabled={busy || busyId !== null}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 transition-colors disabled:opacity-50"
+                        title={enrolled ? 'Add another reference photo' : 'Upload a reference photo'}
+                        aria-label={enrolled ? `Add another reference photo for ${instructor.name}` : `Upload a reference photo for ${instructor.name}`}
+                        className={`w-8 h-8 rounded-md inline-flex items-center justify-center border transition-colors disabled:opacity-50 ${
+                          enrolled
+                            ? 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+                            : 'text-indigo-700 bg-indigo-50 border-indigo-100 hover:bg-indigo-100'
+                        }`}
                       >
-                        <Upload size={14} aria-hidden="true" />
-                        {busy ? 'Uploading…' : enrolled ? 'Add another' : 'Upload photo'}
+                        {busy
+                          ? <RefreshCw size={15} className="animate-spin" aria-hidden="true" />
+                          : enrolled
+                            ? <RefreshCcwDot size={15} aria-hidden="true" />
+                            : <Upload size={15} aria-hidden="true" />}
                       </button>
                     </td>
                   </tr>
@@ -298,6 +361,56 @@ export default function CollegeEnrolmentList({
           </tbody>
         </table>
       </div>
+
+      {photoFor && (
+        <div
+          className="fixed inset-0 z-[110] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Reference photo for ${photoFor.name}`}
+          onClick={() => setPhotoFor(null)}
+        >
+          {/* Clicking the backdrop closes; clicking the photo itself must not,
+              or examining it dismisses the thing being examined. */}
+          <div
+            className="bg-white rounded-md shadow-xl max-w-lg w-full overflow-hidden"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-4 p-4 border-b border-slate-100">
+              <div className="min-w-0">
+                <p className="font-bold text-slate-800 truncate" title={photoFor.name}>{photoFor.name}</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Reference photo — recognition compares check-in photos to this.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPhotoFor(null)}
+                aria-label="Close"
+                className="shrink-0 w-8 h-8 rounded-full border border-slate-200 text-slate-400 hover:text-slate-700 hover:bg-slate-50 flex items-center justify-center"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="p-4 flex items-center justify-center min-h-[16rem] bg-slate-50">
+              {photoError ? (
+                <p className="text-sm font-medium text-slate-500 flex flex-col items-center gap-2" role="alert">
+                  <ImageOff size={28} className="text-slate-300" aria-hidden="true" />
+                  {photoError}
+                </p>
+              ) : photoUrl ? (
+                <img
+                  src={photoUrl}
+                  alt={`Reference photo for ${photoFor.name}`}
+                  className="max-h-[60vh] w-auto rounded-md"
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-400" role="status">Loading photo…</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

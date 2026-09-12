@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ScanFace, TriangleAlert } from 'lucide-react';
+import { ListChecks, RotateCcw, ScanFace, TriangleAlert } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { apiFetch, apiJson } from '../api';
 import CollegeEnrolmentList from './CollegeEnrolmentList';
 import { useToast } from './useToast';
@@ -106,6 +107,37 @@ export default function IdentificationSettingsSection() {
     </button>
   );
 
+  /**
+   * One mode as an icon, for the per-college rows.
+   *
+   * The label moves into the tooltip so the column stays one line wide across
+   * thirty-odd colleges. The active mode is filled rather than outlined, and
+   * carries aria-pressed, so which one is on does not depend on colour alone.
+   */
+  const modeIcon = (
+    Icon: LucideIcon,
+    active: boolean,
+    label: string,
+    onClick: () => void,
+    disabled: boolean,
+  ) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      title={label}
+      aria-label={label}
+      className={`w-8 h-8 rounded-md flex items-center justify-center border transition-colors disabled:cursor-default ${
+        active
+          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50'
+      }`}
+    >
+      <Icon size={15} aria-hidden="true" />
+    </button>
+  );
+
   if (loading) {
     return (
       <div className="bg-white rounded-md shadow-sm border border-slate-200 p-6">
@@ -178,18 +210,22 @@ export default function IdentificationSettingsSection() {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse">
+        <table className="w-full text-left border-collapse table-fixed">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
-              <th className="p-4">College</th>
-              <th className="p-4">Reference photos</th>
-              <th className="p-4">Identification</th>
+              {/* Fixed widths so a long college name truncates on one line
+                  rather than wrapping and making its row twice the height of
+                  every other. */}
+              <th className="p-4 w-[40%]">College</th>
+              <th className="p-4 w-[15%]">Instructors</th>
+              <th className="p-4 w-[22%]">Reference photos</th>
+              <th className="p-4 w-[23%]">Identification</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {settings.colleges.length === 0 ? (
               <tr>
-                <td colSpan={3} className="p-8 text-center text-slate-400 font-medium">
+                <td colSpan={4} className="p-8 text-center text-slate-400 font-medium">
                   No colleges yet.
                 </td>
               </tr>
@@ -207,47 +243,50 @@ export default function IdentificationSettingsSection() {
                   })}
                   className="hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  <td className="p-4">
-                    <span className="font-bold text-slate-800 hover:text-indigo-700">
-                      {college.college_name || '--'}
-                    </span>
-                    {college.source === 'DEFAULT' && (
-                      <span className="block text-[11px] text-slate-400 font-medium mt-0.5">
-                        Following the default
+                  {/* One line, ellipsis on overflow, full name in the tooltip —
+                      the same treatment every other table in the app gives a
+                      name column. */}
+                  <td className="p-4 font-bold text-slate-800 truncate" title={college.college_name || ''}>
+                    {college.college_name || '--'}
+                    {college.source === 'COLLEGE' && (
+                      <span className="ml-2 text-[10px] font-bold text-indigo-600 uppercase tracking-wider">
+                        set
                       </span>
                     )}
                   </td>
-                  <td className="p-4">
-                    <span className="text-sm font-medium text-slate-700">
+                  <td className="p-4 text-sm font-medium text-slate-600 whitespace-nowrap">
+                    {college.instructors}
+                  </td>
+                  <td className="p-4 whitespace-nowrap">
+                    <span className="text-sm font-bold text-slate-700">
                       {college.enrolled}/{college.instructors}
-                    </span>
-                    <span className="text-xs text-slate-400 ml-1.5">
-                      ({college.enrolled_percent}%)
                     </span>
                     {college.low_enrolment && (
                       <span
-                        className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 font-bold text-[10px] rounded border border-amber-100 whitespace-nowrap"
+                        className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-700 font-bold text-[10px] rounded border border-amber-100"
                         title={`Fewer than ${settings.low_enrolment_percent}% of instructors have a reference photo`}
                       >
                         <TriangleAlert size={10} aria-hidden="true" />
-                        Low
+                        {college.enrolled_percent}%
                       </span>
                     )}
                   </td>
                   {/* Stops a mode change from also opening the college. */}
-                  <td className="p-4" onClick={(event) => event.stopPropagation()}>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {modeButton(
+                  <td className="p-4 whitespace-nowrap" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex items-center gap-1.5">
+                      {modeIcon(
+                        ScanFace,
                         college.mode === 'FACE_ONLY',
-                        'Face only',
+                        'Face only — the photo identifies the instructor',
                         () => setCollegeMode(college, 'FACE_ONLY'),
-                        savingKey !== null,
+                        savingKey !== null || college.mode === 'FACE_ONLY',
                       )}
-                      {modeButton(
+                      {modeIcon(
+                        ListChecks,
                         college.mode === 'SELECTOR',
-                        'Selector',
+                        'Selector — a BOA picks the instructor by name',
                         () => setCollegeMode(college, 'SELECTOR'),
-                        savingKey !== null,
+                        savingKey !== null || college.mode === 'SELECTOR',
                       )}
                       {/* Clearing an override is distinct from choosing the
                           default's current value: it keeps following the default
@@ -257,9 +296,11 @@ export default function IdentificationSettingsSection() {
                           type="button"
                           onClick={() => setCollegeMode(college, null)}
                           disabled={savingKey !== null}
-                          className="px-2.5 py-1.5 rounded-md text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50"
+                          title="Follow the workspace default again"
+                          aria-label="Follow the workspace default again"
+                          className="w-8 h-8 rounded-md flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50"
                         >
-                          Use default
+                          <RotateCcw size={15} aria-hidden="true" />
                         </button>
                       )}
                     </div>
