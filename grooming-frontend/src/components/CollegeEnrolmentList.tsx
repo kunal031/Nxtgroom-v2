@@ -221,65 +221,76 @@ export default function CollegeEnrolmentList({
 
   return (
     <div className="bg-white rounded-md shadow-sm border border-slate-200 overflow-hidden">
-      <div className="p-6 border-b border-slate-100">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors mb-3"
-        >
-          <ArrowLeft size={14} aria-hidden="true" />
-          All colleges
-        </button>
-        <h3 className="text-base font-extrabold text-slate-800">{collegeName}</h3>
-        <p className="text-sm text-slate-500 mt-1">
-          {enrolledCount} of {collegeInstructors.length} instructors have a reference photo.
-          Recognition can only identify the ones that do.
-        </p>
-
-        <div className="mt-4 flex items-center gap-2 flex-wrap">
-          {filterButton('needs_photo', 'Needs photo', collegeInstructors.length - enrolledCount)}
-          {filterButton('enrolled', 'Enrolled', enrolledCount)}
-          {filterButton('all', 'All', collegeInstructors.length)}
-          <div className="relative flex-1 basis-full sm:basis-auto sm:min-w-[12rem]">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-            <input
-              type="text"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search this college…"
-              className="w-full pl-9 pr-3 py-2 rounded-md border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-            />
+      <div className="p-3 border-b border-slate-100">
+        {/* Back link, college and count on one line, with the filters beside
+            them. The sentence that used to sit here said what the filter
+            buttons already say — each carries its own count — and the total is
+            the one figure they did not give. */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to all colleges"
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors shrink-0"
+          >
+            <ArrowLeft size={14} aria-hidden="true" />
+            All colleges
+          </button>
+          <h3 className="text-sm font-extrabold text-slate-800 truncate" title={collegeName}>
+            {collegeName}
+          </h3>
+          <span className="text-xs font-medium text-slate-500 shrink-0">
+            {collegeInstructors.length} instructor{collegeInstructors.length === 1 ? '' : 's'}
+          </span>
+          <div className="flex items-center gap-1.5 flex-wrap ml-auto">
+            {filterButton('needs_photo', 'Needs photo', collegeInstructors.length - enrolledCount)}
+            {filterButton('enrolled', 'Enrolled', enrolledCount)}
+            {filterButton('all', 'All', collegeInstructors.length)}
           </div>
         </div>
 
+        {/* Its own row, full width: a search box sharing a line with four other
+            controls was the first thing to be squeezed on a narrow screen. */}
+        <div className="relative mt-2">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <input
+            type="text"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search this college…"
+            aria-label="Search this college"
+            className="w-full pl-9 pr-3 py-2 rounded-md border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+          />
+        </div>
+
         {error && (
-          <p role="alert" className="mt-3 text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2.5">
+          <p role="alert" className="mt-2 text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-md p-2.5">
             {error}
           </p>
         )}
       </div>
 
-      {/* See IdentificationSettingsSection: table-fixed at w-full cannot
-          overflow, so without a minimum the columns crush on a phone rather
-          than the wrapper scrolling. */}
+      {/* Two of the four columns hold a single 32px icon, so at p-4 the padding
+          was wider than the content and forced a scroll the table did not need.
+          The minimum width goes with it: at px-3 the four columns fit. */}
       <div className="overflow-x-auto overscroll-x-contain">
-        <table className="w-full min-w-[34rem] text-left border-collapse table-fixed">
+        <table className="w-full text-left border-collapse table-fixed">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
               {/* Fixed widths so a long name truncates on one line instead of
                   wrapping and doubling its row's height. */}
-              <th className="p-4 w-[45%]">Instructor</th>
-              <th className="p-4 w-[25%]">Role</th>
-              <th className="p-4 w-[15%]">Reference image</th>
-              <th className="p-4 w-[15%] text-right">Action</th>
+              <th className="px-3 py-2.5 w-[44%]">Instructor</th>
+              <th className="px-3 py-2.5 w-[30%]">Role</th>
+              <th className="px-3 py-2.5 w-[13%]">Photo</th>
+              <th className="px-3 py-2.5 w-[13%] text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td colSpan={4} className="p-8 text-center text-slate-400 font-medium">Loading instructors…</td></tr>
+              <tr><td colSpan={4} className="p-6 text-center text-slate-400 font-medium">Loading instructors…</td></tr>
             ) : visible.length === 0 ? (
               <tr>
-                <td colSpan={4} className="p-8 text-center text-slate-400 font-medium">
+                <td colSpan={4} className="p-6 text-center text-slate-400 font-medium">
                   {filter === 'needs_photo' && collegeInstructors.length > 0
                     ? 'Every instructor at this college has a reference photo.'
                     : 'No instructors found.'}
@@ -291,16 +302,16 @@ export default function CollegeEnrolmentList({
                 const busy = busyId === instructor._id;
                 return (
                   <tr key={instructor._id} className="hover:bg-slate-50 transition-colors">
-                    <td className="p-4 font-bold text-slate-800 truncate" title={instructor.name}>
+                    <td className="px-3 py-2 font-bold text-slate-800 truncate" title={instructor.name}>
                       {instructor.name}
                     </td>
                     <td
-                      className="p-4 text-sm font-medium text-slate-500 truncate"
+                      className="px-3 py-2 text-sm font-medium text-slate-500 truncate"
                       title={instructor.instructor_role || instructor.role || ''}
                     >
                       {instructor.instructor_role || instructor.role || '--'}
                     </td>
-                    <td className="p-4 whitespace-nowrap">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       {enrolled ? (
                         // The photo itself is the useful thing, so the cell is
                         // the way to open it rather than a badge describing it.
@@ -328,7 +339,7 @@ export default function CollegeEnrolmentList({
                         </IconTooltip>
                       )}
                     </td>
-                    <td className="p-4 text-right whitespace-nowrap">
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
                       <input
                         ref={(element) => { fileInputs.current[instructor._id] = element; }}
                         type="file"
