@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ListChecks, RotateCcw, ScanFace } from 'lucide-react';
+import { ListChecks, RotateCcw, ScanFace, Search } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { apiFetch, apiJson } from '../api';
 import CollegeEnrolmentList from './CollegeEnrolmentList';
+import IconTooltip from './IconTooltip';
 import { useToast } from './useToast';
 import type { CollegeIdentification, IdentificationMode, IdentificationSettings } from '../types';
 
@@ -27,6 +28,7 @@ export default function IdentificationSettingsSection() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   /** The college whose instructors are being enrolled, or null for the table. */
   const [openCollege, setOpenCollege] = useState<{ id: string; name: string } | null>(null);
+  const [search, setSearch] = useState('');
   const toast = useToast();
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -121,21 +123,22 @@ export default function IdentificationSettingsSection() {
     onClick: () => void,
     disabled: boolean,
   ) => (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={active}
-      title={label}
-      aria-label={label}
-      className={`w-8 h-8 rounded-md flex items-center justify-center border transition-colors disabled:cursor-default ${
-        active
-          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
-          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50'
-      }`}
-    >
-      <Icon size={15} aria-hidden="true" />
-    </button>
+    <IconTooltip label={label}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-pressed={active}
+        aria-label={label}
+        className={`w-8 h-8 rounded-md flex items-center justify-center border transition-colors disabled:cursor-default ${
+          active
+            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50'
+        }`}
+      >
+        <Icon size={15} aria-hidden="true" />
+      </button>
+    </IconTooltip>
   );
 
   if (loading) {
@@ -167,6 +170,13 @@ export default function IdentificationSettingsSection() {
     );
   }
 
+  const term = search.trim().toLowerCase();
+  const visibleColleges = term
+    ? settings.colleges.filter((college) => (
+        String(college.college_name || '').toLowerCase().includes(term)
+      ))
+    : settings.colleges;
+
   return (
     <div className="bg-white rounded-md shadow-sm border border-slate-200 overflow-hidden">
       <div className="p-6 border-b border-slate-100">
@@ -174,6 +184,20 @@ export default function IdentificationSettingsSection() {
           <ScanFace size={18} className="text-indigo-600" aria-hidden="true" />
           Instructor identification
         </h3>
+
+        {/* Thirty-odd colleges is more than anybody scans to change one, and
+            enrolment is worked through a campus at a time. */}
+        <div className="mt-4 relative max-w-sm">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <input
+            type="text"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search colleges…"
+            aria-label="Search colleges"
+            className="w-full pl-9 pr-3 py-2 rounded-md border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+          />
+        </div>
 
         <div className="mt-4 flex items-center gap-3 flex-wrap">
           <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
@@ -205,14 +229,19 @@ export default function IdentificationSettingsSection() {
               <th className="p-4 w-[40%]">College</th>
               <th className="p-4 w-[15%]">Instructors</th>
               <th className="p-4 w-[22%]">Reference photos</th>
-              <th className="p-4 w-[23%]">Identification</th>
+              <th className="p-4 w-[23%]">Mode</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {settings.colleges.length === 0 ? (
+            {visibleColleges.length === 0 ? (
               <tr>
                 <td colSpan={4} className="p-8 text-center text-slate-400 font-medium">
-                  No colleges yet.
+                  {/* "Nothing matched" and "nothing exists" look identical to
+                      somebody who has just typed, and only one of them means
+                      the search should be cleared. */}
+                  {settings.colleges.length === 0
+                    ? 'No colleges yet.'
+                    : `No colleges match “${search.trim()}”.`}
                 </td>
               </tr>
             ) : (
@@ -220,7 +249,7 @@ export default function IdentificationSettingsSection() {
               // a small target, and every cell in the row is about the same
               // college. The mode buttons stop the click travelling up, so
               // changing a mode does not also navigate.
-              settings.colleges.map((college) => (
+              visibleColleges.map((college) => (
                 <tr
                   key={college.college_id}
                   onClick={() => setOpenCollege({
@@ -269,16 +298,17 @@ export default function IdentificationSettingsSection() {
                           default's current value: it keeps following the default
                           if that default later changes. */}
                       {college.source === 'COLLEGE' && (
-                        <button
-                          type="button"
-                          onClick={() => setCollegeMode(college, null)}
-                          disabled={savingKey !== null}
-                          title="Follow the workspace default again"
-                          aria-label="Follow the workspace default again"
-                          className="w-8 h-8 rounded-md flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50"
-                        >
-                          <RotateCcw size={15} aria-hidden="true" />
-                        </button>
+                        <IconTooltip label="Follow the default again">
+                          <button
+                            type="button"
+                            onClick={() => setCollegeMode(college, null)}
+                            disabled={savingKey !== null}
+                            aria-label="Follow the workspace default again"
+                            className="w-8 h-8 rounded-md flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors disabled:opacity-50"
+                          >
+                            <RotateCcw size={15} aria-hidden="true" />
+                          </button>
+                        </IconTooltip>
                       )}
                     </div>
                   </td>

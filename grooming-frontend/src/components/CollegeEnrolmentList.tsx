@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Image as ImageIcon, ImageOff, RefreshCcwDot, RefreshCw, Search, Upload, X } from 'lucide-react';
 import { apiFetch, apiFetchAllPages, invalidateCache } from '../api';
+import IconTooltip from './IconTooltip';
 import { preparePhoto } from '../lib/imageCapture';
 import { validatePhoto, validateSourcePhoto } from '../imageValidation';
 import { useToast } from './useToast';
@@ -300,23 +301,28 @@ export default function CollegeEnrolmentList({
                       {enrolled ? (
                         // The photo itself is the useful thing, so the cell is
                         // the way to open it rather than a badge describing it.
-                        <button
-                          type="button"
-                          onClick={() => setPhotoFor(instructor)}
-                          title={`View ${instructor.name}'s reference photo`}
-                          aria-label={`View ${instructor.name}'s reference photo`}
-                          className="w-8 h-8 rounded-md flex items-center justify-center text-emerald-700 bg-emerald-50 border border-emerald-100 hover:bg-emerald-100 transition-colors"
-                        >
-                          <ImageIcon size={15} aria-hidden="true" />
-                        </button>
+                        <IconTooltip label="View reference photo">
+                          <button
+                            type="button"
+                            onClick={() => setPhotoFor(instructor)}
+                            aria-label={`View ${instructor.name}'s reference photo`}
+                            className="w-8 h-8 rounded-md flex items-center justify-center text-emerald-700 bg-emerald-50 border border-emerald-100 hover:bg-emerald-100 transition-colors"
+                          >
+                            <ImageIcon size={15} aria-hidden="true" />
+                          </button>
+                        </IconTooltip>
                       ) : (
-                        <span
-                          title="No reference photo — this instructor cannot be recognised"
-                          aria-label="No reference photo"
-                          className="w-8 h-8 rounded-md flex items-center justify-center text-slate-400 bg-slate-50 border border-slate-200"
-                        >
-                          <X size={15} aria-hidden="true" />
-                        </span>
+                        // Not a button, and the one icon here that cannot be
+                        // clicked to find out what it means — so the label
+                        // matters more, not less.
+                        <IconTooltip label="No reference photo — cannot be recognised">
+                          <span
+                            aria-label="No reference photo"
+                            className="w-8 h-8 rounded-md flex items-center justify-center text-slate-400 bg-slate-50 border border-slate-200"
+                          >
+                            <X size={15} aria-hidden="true" />
+                          </span>
+                        </IconTooltip>
                       )}
                     </td>
                     <td className="p-4 text-right whitespace-nowrap">
@@ -335,24 +341,25 @@ export default function CollegeEnrolmentList({
                           the same: adding a first reference is what makes
                           somebody recognisable, while adding another only
                           improves a face that already works. */}
-                      <button
-                        type="button"
-                        onClick={() => fileInputs.current[instructor._id]?.click()}
-                        disabled={busy || busyId !== null}
-                        title={enrolled ? 'Add another reference photo' : 'Upload a reference photo'}
-                        aria-label={enrolled ? `Add another reference photo for ${instructor.name}` : `Upload a reference photo for ${instructor.name}`}
-                        className={`w-8 h-8 rounded-md inline-flex items-center justify-center border transition-colors disabled:opacity-50 ${
-                          enrolled
-                            ? 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
-                            : 'text-indigo-700 bg-indigo-50 border-indigo-100 hover:bg-indigo-100'
-                        }`}
-                      >
-                        {busy
-                          ? <RefreshCw size={15} className="animate-spin" aria-hidden="true" />
-                          : enrolled
-                            ? <RefreshCcwDot size={15} aria-hidden="true" />
-                            : <Upload size={15} aria-hidden="true" />}
-                      </button>
+                      <IconTooltip label={enrolled ? 'Add another photo' : 'Upload reference photo'}>
+                        <button
+                          type="button"
+                          onClick={() => fileInputs.current[instructor._id]?.click()}
+                          disabled={busy || busyId !== null}
+                          aria-label={enrolled ? `Add another reference photo for ${instructor.name}` : `Upload a reference photo for ${instructor.name}`}
+                          className={`w-8 h-8 rounded-md inline-flex items-center justify-center border transition-colors disabled:opacity-50 ${
+                            enrolled
+                              ? 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+                              : 'text-indigo-700 bg-indigo-50 border-indigo-100 hover:bg-indigo-100'
+                          }`}
+                        >
+                          {busy
+                            ? <RefreshCw size={15} className="animate-spin" aria-hidden="true" />
+                            : enrolled
+                              ? <RefreshCcwDot size={15} aria-hidden="true" />
+                              : <Upload size={15} aria-hidden="true" />}
+                        </button>
+                      </IconTooltip>
                     </td>
                   </tr>
                 );
