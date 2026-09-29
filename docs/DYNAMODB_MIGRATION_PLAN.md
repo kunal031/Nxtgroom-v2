@@ -111,12 +111,16 @@ lets us move one collection at a time.
 All tables: on-demand capacity, point-in-time recovery on, deletion protection
 on, names prefixed `facultytrack-` (e.g. `facultytrack-attendance`).
 
+Tables keyed by a document id use the attribute name `_id`, as in MongoDB,
+so a document and its item are identical and can be compared field for
+field (`npm run dynamo:compare`).
+
 Notation: **PK** = partition key, **SK** = sort key, **GSI** = global secondary
 index (a second way to look up the same table).
 
 ### 4.1 `attendance`
 
-Table key: **PK `id`**.
+Table key: **PK `_id`**.
 
 | Index | PK | SK | Answers |
 |---|---|---|---|
@@ -144,7 +148,7 @@ The 90-day audit scan moves to an offline script.
 
 ### 4.3 `instructors`
 
-Table key: **PK `id`**.
+Table key: **PK `_id`**.
 
 | Index | PK | SK | Answers |
 |---|---|---|---|
@@ -340,7 +344,7 @@ Expected idle load: from ~9 ops/s to **<1 op/s** per server.
 | **4** | **DynamoDB stores**: a second implementation of each store. Contract tests pass on both. | 2–3 weeks | not used yet |
 | **5** | **Copy data**: one-off script MongoDB → DynamoDB (read-only on MongoDB), with a count and sample check per table. | 1–2 days | re-run |
 | **6** | **Dual write**: `DB_WRITE_TO=both`, `DB_READ_FROM=mongo`. A daily compare job reports differences. Run 1–2 weeks. | 1–2 weeks | set `DB_WRITE_TO=mongo` |
-| **7** | **Move reads one group at a time**: settings/colleges/BOAs → users/instructors → job tables → attendance/evaluations. Watch logs for a few days after each. | 1–2 weeks | set back to `mongo` |
+| **7** | **Move reads one group at a time**, in the order below. Watch logs for a few days after each. | 1–2 weeks | set back to `mongo` |
 | **8** | **Remove MongoDB**: stop writing to it; keep it read-only 30 days with a final export; then remove the `mongodb` package, `MONGODB_URI`, `databasePreflight.js`, `idMatch`, and the MongoDB docs; close Atlas. | 2 days + 30-day wait | restore from export |
 
 Per-collection switches (Phase 6–7), in `.env`:
@@ -355,6 +359,24 @@ DB_READ_FROM_ATTENDANCE=mongo
 In dual-write, MongoDB is written first and is the answer the user sees. A
 failed DynamoDB write is logged and fixed by the compare job; it never fails
 the user's request.
+
+**Order: transactions decide it.** A MongoDB transaction cannot include a
+DynamoDB write, so collections written together in one transaction must
+switch to DynamoDB together. Creating a BOA writes the college, the BOA and
+the login at once; a check-in writes the instructor's guard and the
+attendance record at once; and so on (section 6.1). That makes one large
+group, which moves last:
+
+| Group | Collections | Why this order | Status |
+|---|---|---|---|
+| 1 | `app_settings` | No transactions, small, easy to undo | Store done (#17) |
+| 2 | `report_delivery_runs`, `evaluations` | No transactions | Stores done |
+| 3 | the four job queues | No transactions; needs the claim design (4.6) | Next |
+| 4 | `colleges`, `boas`, `users`, `password_resets`, `instructors`, `attendance` | Share the 10 transactions; switch together | Last |
+
+Groups 1–3 can each be written to both databases and switched on their
+own. Group 4 is written to both for as long as needed, then all six switch
+to DynamoDB reads in one step.
 
 **Job tables during dual write:** jobs must be claimed from one database
 only. Jobs stay on MongoDB until Phase 7 moves the whole job group at once,
