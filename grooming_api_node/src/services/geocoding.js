@@ -1,3 +1,5 @@
+import { coreCollection } from "../stores/coreStore.js";
+
 /**
  * Turns check-in coordinates into a human-readable address.
  *
@@ -120,7 +122,7 @@ export async function attachAddressToAttendance(db, attendanceId, coordinates, k
   if (!result) return null;
   const prefix = kind === "checkout" ? "check_out_" : "";
   try {
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendanceId },
       {
         $set: {

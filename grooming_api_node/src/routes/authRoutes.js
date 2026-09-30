@@ -35,9 +35,9 @@ import {
 } from "../services/passwordResetService.js";
 import { enqueueMailJob } from "../services/mailWorker.js";
 import { sealSecret } from "../services/secretBox.js";
-import { withMongoTransaction } from "../config/db.js";
 import rateLimit from "express-rate-limit";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection, coreTransaction } from "../stores/coreStore.js";
 
 // Credential verification is a network call to Google; rate limit it so a
 // flood of forged tokens cannot exhaust the request budget.
@@ -67,7 +67,7 @@ const passwordResetLimiter = rateLimit({
 async function displayNameForUser(db, user) {
   if (user.name) return user.name;
   if (user.role === ROLES.BOA && user.reference_id) {
-    const boa = await db.collection("boas").findOne(
+    const boa = await coreCollection(db, "boas").findOne(
       { _id: user.reference_id },
       { projection: { name: 1 } }
     );
@@ -143,7 +143,7 @@ authRouter.post(
       return res.status(422).json({ detail: "Username and password are required" });
     }
 
-    const user = await req.app.locals.db.collection("users").findOne({ email });
+    const user = await coreCollection(req.app.locals.db, "users").findOne({ email });
     const passwordMatches = await verifyPassword(password, user?.password_hash);
     if (!user || user.disabled_at || !Object.values(ROLES).includes(user.role) || !passwordMatches) {
       return res.status(401).json({ detail: "Incorrect email or password" });
@@ -183,7 +183,7 @@ authRouter.post(
     }
 
     const db = req.app.locals.db;
-    const user = await db.collection("users").findOne({ email: req.currentUser.email });
+    const user = await coreCollection(db, "users").findOne({ email: req.currentUser.email });
     if (!user || !(await verifyPassword(currentPassword, user.password_hash))) {
       return res.status(401).json({ detail: "Current password is incorrect" });
     }
@@ -191,7 +191,7 @@ authRouter.post(
     // Bumping session_version invalidates every existing token for this user,
     // including the one making this request, so a stolen token cannot survive
     // a password change.
-    await db.collection("users").updateOne(
+    await coreCollection(db, "users").updateOne(
       { _id: user._id },
       {
         $set: {
@@ -231,7 +231,7 @@ authRouter.post(
     }
 
     const db = req.app.locals.db;
-    const user = await db.collection("users").findOne({ email });
+    const user = await coreCollection(db, "users").findOne({ email });
 
     // Disabled accounts get no link; re-enabling is an administrator action.
     if (user && !user.disabled_at && Object.values(ROLES).includes(user.role)) {
@@ -298,17 +298,17 @@ authRouter.post(
 
     const db = req.app.locals.db;
     const passwordHash = await getPasswordHash(newPassword);
-    const outcome = await withMongoTransaction(async (session) => {
+    const outcome = await coreTransaction(db)(async (session) => {
       const consumed = await consumeResetToken(db, token, { session });
       if (consumed.error) return consumed;
-      const user = await db.collection("users").findOne(
+      const user = await coreCollection(db, "users").findOne(
         { email: consumed.email },
         { session }
       );
       if (!user || user.disabled_at || !Object.values(ROLES).includes(user.role)) {
         return { error: "account_unavailable" };
       }
-      const changed = await db.collection("users").updateOne(
+      const changed = await coreCollection(db, "users").updateOne(
         { _id: user._id, disabled_at: { $exists: false } },
         {
           $set: {

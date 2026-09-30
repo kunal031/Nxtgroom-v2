@@ -66,8 +66,10 @@ test("no instructor lookup outside the roster code compares a raw id", async () 
     // Capture what follows _id: rather than using a lookahead. A lookahead
     // after \s* backtracks to zero width and passes on any whitespace, so it
     // reported a clean file as broken.
+    // Matches both db.collection("instructors") and the store call that
+    // replaced it, coreCollection(db, "instructors").
     const lookups = [...source.matchAll(
-      /collection\("instructors"\)[\s\S]{0,80}?findOne\(\{\s*_id:\s*([A-Za-z_$][\w$]*)/g
+      /[Cc]ollection\((?:db, )?"instructors"\)[\s\S]{0,80}?findOne\(\{\s*_id:\s*([A-Za-z_$][\w$]*)/g
     )];
     assert.ok(lookups.length > 0, `${file} no longer looks up an instructor; update this test`);
     for (const [, expression] of lookups) {

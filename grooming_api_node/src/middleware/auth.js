@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { ObjectId } from "mongodb";
 import { runtimeConfig } from "../config/env.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const ALGORITHM = "HS256";
 export const SESSION_COOKIE = "facultytrack_session";
@@ -95,7 +96,7 @@ export async function getCurrentUser(req, res, next) {
       return res.status(401).json({ detail: "Could not validate credentials" });
     }
     const db = req.app.locals.db;
-    const user = await db.collection("users").findOne({ email: payload.sub });
+    const user = await coreCollection(db, "users").findOne({ email: payload.sub });
     if (
       !user
       || user.disabled_at
@@ -107,7 +108,7 @@ export async function getCurrentUser(req, res, next) {
     }
     let collegeId = null;
     if (user.role === ROLES.BOA) {
-      const boa = await db.collection("boas").findOne({
+      const boa = await coreCollection(db, "boas").findOne({
         $and: [
           { _id: idMatch(String(user.reference_id)) },
           { $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }] },

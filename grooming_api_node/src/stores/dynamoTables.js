@@ -7,6 +7,7 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { toItem } from "./dynamoItems.js";
 import { dynamoJobCollection, JOB_INDEXES, JOB_QUEUES } from "./jobStore.js";
+import { CORE_DEFINITIONS, dynamoCoreCollection, UNIQUE_KEYS_STORE } from "./coreStore.js";
 
 /**
  * Every DynamoDB table the application uses, in one place, so the setup
@@ -69,6 +70,30 @@ export const DYNAMO_TABLES = Object.freeze([
     keyOf: (item) => String(item._id),
     ignoreOnCompare: ["rev"],
   })),
+  // The collections that share transactions, and the reservation items that
+  // stand in for their unique indexes.
+  ...Object.entries(CORE_DEFINITIONS).map(([store, definition]) => {
+    const indexes = Object.entries(definition.indexes || {});
+    const attributes = new Map([["_id", "S"]]);
+    for (const [, index] of indexes) {
+      attributes.set(index.attribute, "S");
+      if (index.sortAttribute) attributes.set(index.sortAttribute, "S");
+    }
+    return {
+      store,
+      attributes: [...attributes].map(([AttributeName, AttributeType]) => ({ AttributeName, AttributeType })),
+      keySchema: [{ AttributeName: "_id", KeyType: "HASH" }],
+      indexes: indexes.map(([name, index]) => ({
+        name,
+        attribute: index.attribute,
+        sortAttribute: index.sortAttribute,
+      })),
+      itemFromDocument: (document) => dynamoCoreCollection(store).itemFromDocument(document),
+      keyOf: (item) => String(item._id),
+      ignoreOnCompare: ["rev", ...Object.keys(definition.derive({}))],
+    };
+  }),
+  { store: UNIQUE_KEYS_STORE, ...byId },
 ]);
 
 export function dynamoTableDefinition(store) {
@@ -193,7 +218,10 @@ export async function ensureDynamoTables(client, {
       ...(definition.indexes?.length ? {
         GlobalSecondaryIndexes: definition.indexes.map((index) => ({
           IndexName: index.name,
-          KeySchema: [{ AttributeName: index.attribute, KeyType: "HASH" }],
+          KeySchema: [
+            { AttributeName: index.attribute, KeyType: "HASH" },
+            ...(index.sortAttribute ? [{ AttributeName: index.sortAttribute, KeyType: "RANGE" }] : []),
+          ],
           Projection: { ProjectionType: "ALL" },
         })),
       } : {}),

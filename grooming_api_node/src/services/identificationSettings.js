@@ -1,4 +1,5 @@
 import { getSetting, saveSetting } from "../stores/settingsStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 /**
  * How a check-in decides who the instructor is.
@@ -200,7 +201,7 @@ export function describeCollegeIdentification(settings, colleges, enrolment) {
  * trip would make the settings page slower with every campus added.
  */
 export async function loadCollegeEnrolment(db) {
-  const rows = await db.collection("instructors").aggregate([
+  const rows = await coreCollection(db, "instructors").aggregate([
     {
       $match: {
         $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }],

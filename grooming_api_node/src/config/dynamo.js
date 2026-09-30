@@ -24,6 +24,9 @@ export const DYNAMO_STORES = Object.freeze([
   "notification_jobs",
   "mail_jobs",
   "storage_cleanup_jobs",
+  // The collections that share MongoDB transactions switch together, under
+  // one name: DB_WRITE_TO_CORE / DB_READ_FROM_CORE (see coreStore.js).
+  "core",
 ]);
 
 const WRITE_TARGETS = ["mongo", "both", "dynamo"];

@@ -20,6 +20,7 @@ import { reportRecipientsFor } from "./reportRecipients.js";
 import { ensureReportToken, localDateKey } from "./instructorReports.js";
 import { appUrl } from "../config/env.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const WORKER_ID = randomUUID();
 const EVALUATION_OUTBOX_FIELD = "_private_evaluation_outbox";
@@ -136,7 +137,7 @@ async function sendGroomingAlerts(db, {
   // below then silently cancelled the alert — to the instructor and to every
   // reporting partner alike.
   const instructor = instructorId
-    ? await db.collection("instructors").findOne({ _id: idMatch(String(instructorId)) })
+    ? await coreCollection(db, "instructors").findOne({ _id: idMatch(String(instructorId)) })
     : null;
   if (!instructor) {
     console.error(`Grooming alert skipped: instructor ${instructorId} was not found`);
@@ -233,7 +234,7 @@ async function sendComplianceReports(db, {
   const recipients = await reportRecipientsFor(db, kind);
   if (!recipients.length) return 0;
   const instructor = instructorId
-    ? await db.collection("instructors").findOne({ _id: idMatch(String(instructorId)) })
+    ? await coreCollection(db, "instructors").findOne({ _id: idMatch(String(instructorId)) })
     : null;
   if (!instructor) return 0;
 
@@ -323,7 +324,7 @@ export function nonCompliantOccurrences(records) {
  */
 async function escalateRepeatedNonCompliance(db, { attendanceId, instructorId, kind = "checkin" }) {
   if (!instructorId) return 0;
-  const attendance = await db.collection("attendance").findOne(
+  const attendance = await coreCollection(db, "attendance").findOne(
     { _id: attendanceId },
     { projection: { attendance_day: 1, check_in_time: 1 } }
   );
@@ -332,7 +333,7 @@ async function escalateRepeatedNonCompliance(db, { attendanceId, instructorId, k
   const weekStart = weekStartKey(dayKey);
   const weekEnd = addDaysToKey(weekStart, 6);
 
-  const records = await db.collection("attendance").find(
+  const records = await coreCollection(db, "attendance").find(
     {
       instructor_id: idMatch(String(instructorId)),
       attendance_day: { $gte: weekStart, $lte: weekEnd },
@@ -356,7 +357,7 @@ async function escalateRepeatedNonCompliance(db, { attendanceId, instructorId, k
 
   const recipients = await reportRecipientsFor(db, kind);
   if (!recipients.length) return 0;
-  const instructor = await db.collection("instructors").findOne({ _id: idMatch(String(instructorId)) });
+  const instructor = await coreCollection(db, "instructors").findOne({ _id: idMatch(String(instructorId)) });
   if (!instructor) return 0;
 
   const token = await ensureReportToken(db, instructor);
@@ -487,7 +488,7 @@ export async function enqueueEvaluation(db, payload) {
     { _id: jobId },
     { projection: { status: 1 } }
   );
-  await db.collection("attendance").updateOne(
+  await coreCollection(db, "attendance").updateOne(
     { _id: payload.attendanceId },
     {
       $set: {
@@ -504,7 +505,7 @@ export async function enqueueEvaluation(db, payload) {
 }
 
 export async function reconcileEvaluationOutbox(db) {
-  const attendance = await db.collection("attendance").findOne(
+  const attendance = await coreCollection(db, "attendance").findOne(
     { [EVALUATION_OUTBOX_FIELD]: { $exists: true } },
     { sort: { [`${EVALUATION_OUTBOX_FIELD}.created_at`]: 1 } }
   );
@@ -591,7 +592,7 @@ async function evaluationTargetExists(db, job) {
   if (job.photo_key) {
     filter[checkout ? "check_out_photo_key" : "check_in_photo_key"] = job.photo_key;
   }
-  return Boolean(await db.collection("attendance").findOne(filter, { projection: { _id: 1 } }));
+  return Boolean(await coreCollection(db, "attendance").findOne(filter, { projection: { _id: 1 } }));
 }
 
 async function renewEvaluationLease(db, job) {
@@ -644,7 +645,7 @@ async function syncStoredEvaluation(db, job, evaluation, ownedStatus) {
   // would rewrite the morning's verdict with the evening's photograph, and the
   // weekly counts read those fields.
   if (jobKind(job) === "checkout") {
-    const attendanceUpdate = await db.collection("attendance").updateOne(
+    const attendanceUpdate = await coreCollection(db, "attendance").updateOne(
       {
         _id: job.attendance_id,
         deleting_at: { $exists: false },
@@ -727,7 +728,7 @@ async function syncStoredEvaluation(db, job, evaluation, ownedStatus) {
     }
     return true;
   }
-  const attendanceUpdate = await db.collection("attendance").updateOne(
+  const attendanceUpdate = await coreCollection(db, "attendance").updateOne(
     { _id: job.attendance_id, deleting_at: { $exists: false } },
     {
       $set: {
@@ -953,7 +954,7 @@ async function terminalizeEvaluationOutbox(db, attendance, payload, code) {
     await syncFailedEvaluationOutcome(db, storedJob);
     return;
   }
-  await db.collection("attendance").updateOne(
+  await coreCollection(db, "attendance").updateOne(
     { _id: attendance._id },
     {
       $set: { evaluation_queue_status: storedJob?.status || "queued", updated_at: now },
@@ -970,7 +971,7 @@ export async function syncFailedEvaluationOutcome(db, job) {
     "ANALYSIS_ERROR"
   );
 
-  await db.collection("attendance").updateOne(
+  await coreCollection(db, "attendance").updateOne(
     { _id: job.attendance_id, analysis_completed_at: { $exists: false } },
     {
       $set: {
@@ -1028,7 +1029,7 @@ async function markEvaluationFailed(db, job, error, ownedStatus = "processing") 
   if (jobKind(job) === "checkout") {
     // Only the check-out fields: the check-in half keeps its own report and
     // its own status, which this failure says nothing about.
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: job.attendance_id },
       {
         $set: {

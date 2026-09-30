@@ -1,5 +1,6 @@
 import { dateBoundsInTimeZone } from "../utils.js";
 import { runtimeConfig } from "../config/env.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 /**
  * Marking check-ins that nobody closed.
@@ -77,7 +78,7 @@ export function dayToClose(now = new Date(), { timeZone = runtimeConfig().appTim
 export async function closeOpenCheckIns(db, { dayKey, now = new Date() } = {}) {
   const day = dayKey || dayToClose(now);
   const filter = openCheckInFilter(day);
-  const result = await db.collection("attendance").updateMany(filter, {
+  const result = await coreCollection(db, "attendance").updateMany(filter, {
     $set: {
       checkout_status: NOT_CHECKED_OUT,
       // Recorded separately from updated_at so it is clear this came from the

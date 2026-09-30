@@ -143,10 +143,12 @@ startup may create missing indexes automatically after the same audit passes.
 ### Amazon DynamoDB (migration in progress)
 
 Data is moving from MongoDB to DynamoDB one collection at a time; see
-`docs/DYNAMODB_MIGRATION_PLAN.md`. Migrated so far: `app_settings`,
-`report_delivery_runs`, `evaluations` and the four job queues
-(`evaluation_jobs`, `notification_jobs`, `mail_jobs`,
-`storage_cleanup_jobs`), none of which takes part in a MongoDB transaction. The collections that share transactions (colleges,
+`docs/DYNAMODB_MIGRATION_PLAN.md`. Every collection now has a DynamoDB
+implementation: `app_settings`, `report_delivery_runs`, `evaluations`, the
+four job queues (`evaluation_jobs`, `notification_jobs`, `mail_jobs`,
+`storage_cleanup_jobs`), and the six that share MongoDB transactions
+(`colleges`, `boas`, `users`, `password_resets`, `instructors`,
+`attendance`), which switch together as one group named `core`. The collections that share transactions (colleges,
 BOAs, users, instructors, attendance) move together, last. With the
 switches unset, everything stays on MongoDB and none of this is needed.
 
@@ -204,6 +206,14 @@ switches unset, everything stays on MongoDB and none of this is needed.
 
 6. After a clean week, move reads: `DB_READ_FROM=dynamo`. To undo either
    step, set the value back to `mongo` and redeploy.
+
+The six collections that share transactions switch together, with
+`DB_WRITE_TO_CORE` and `DB_READ_FROM_CORE`, because a transaction cannot
+span two databases. Their unique indexes become reservation items in the
+`facultytrack-unique_keys` table, written in the same DynamoDB transaction
+as the document, so a duplicate still fails with MongoDB's own error and
+the routes keep returning 409. Move this group last, after the others have
+run clean for a week, and during a quiet hour.
 
 The job queues are switched as a group, with the four per-queue settings
 (`DB_WRITE_TO_EVALUATION_JOBS`, `DB_WRITE_TO_NOTIFICATION_JOBS`,

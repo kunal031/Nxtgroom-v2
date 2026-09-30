@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { withMongoTransaction } from "../config/db.js";
 import {
   getPasswordHash,
   idMatch,
@@ -58,6 +57,7 @@ import {
 } from "../services/instructorSync.js";
 import { appUrl } from "../config/env.js";
 import { rateLimit } from "express-rate-limit";
+import { coreCollection, coreTransaction } from "../stores/coreStore.js";
 
 const COLLEGE_ASSIGNMENT_GUARD = "_private_assignment_guard_version";
 
@@ -135,7 +135,7 @@ export function serializeAdminDocument(document) {
 }
 
 export async function listActiveBoasWithAccounts(db) {
-  const rows = await db.collection("boas")
+  const rows = await coreCollection(db, "boas")
     .find(activeFilter())
     .limit(1000)
     .toArray();
@@ -152,7 +152,7 @@ export async function listActiveBoasWithAccounts(db) {
       }
     }
   }
-  const accounts = await db.collection("users")
+  const accounts = await coreCollection(db, "users")
     .find(activeUserFilter({
       role: ROLES.BOA,
       reference_id: { $in: referenceVariants },
@@ -187,22 +187,22 @@ export async function createBoaGuarded(
   db,
   input,
   passwordHash,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const college = await db.collection("colleges").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(input.college_id) }),
       { session }
     );
     if (!college) return { outcome: "college_not_found" };
-    if (await db.collection("users").findOne({ email: input.email }, { session })) {
+    if (await coreCollection(db, "users").findOne({ email: input.email }, { session })) {
       return { outcome: "duplicate_email" };
     }
-    if (await db.collection("boas").findOne({ employee_id: input.employee_id }, { session })) {
+    if (await coreCollection(db, "boas").findOne({ employee_id: input.employee_id }, { session })) {
       return { outcome: "duplicate_employee_id" };
     }
 
-    const collegeGuard = await db.collection("colleges").updateOne(
+    const collegeGuard = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $inc: { [COLLEGE_ASSIGNMENT_GUARD]: 1 } },
       { session }
@@ -228,8 +228,8 @@ export async function createBoaGuarded(
       created_at: now,
       updated_at: now,
     });
-    await db.collection("boas").insertOne(boa, { session });
-    await db.collection("users").insertOne(user, { session });
+    await coreCollection(db, "boas").insertOne(boa, { session });
+    await coreCollection(db, "users").insertOne(user, { session });
     return { outcome: "created", boa };
   });
 }
@@ -239,15 +239,15 @@ export async function updateBoaGuarded(
   boaId,
   input,
   passwordHash,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const boa = await db.collection("boas").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const boa = await coreCollection(db, "boas").findOne(
       activeFilter({ _id: idMatch(boaId) }),
       { session }
     );
     if (!boa) return { outcome: "not_found" };
-    const user = await db.collection("users").findOne(
+    const user = await coreCollection(db, "users").findOne(
       activeUserFilter({
         reference_id: idMatch(String(boa._id)),
         role: ROLES.BOA,
@@ -255,25 +255,25 @@ export async function updateBoaGuarded(
       { session }
     );
     if (!user) return { outcome: "account_unavailable" };
-    const college = await db.collection("colleges").findOne(
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(input.college_id) }),
       { session }
     );
     if (!college) return { outcome: "college_not_found" };
-    if (await db.collection("users").findOne(
+    if (await coreCollection(db, "users").findOne(
       { email: input.email, _id: { $ne: user._id } },
       { session }
     )) {
       return { outcome: "duplicate_email" };
     }
-    if (await db.collection("boas").findOne(
+    if (await coreCollection(db, "boas").findOne(
       { employee_id: input.employee_id, _id: { $ne: boa._id } },
       { session }
     )) {
       return { outcome: "duplicate_employee_id" };
     }
 
-    const collegeGuard = await db.collection("colleges").updateOne(
+    const collegeGuard = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $inc: { [COLLEGE_ASSIGNMENT_GUARD]: 1 } },
       { session }
@@ -281,7 +281,7 @@ export async function updateBoaGuarded(
     if (!collegeGuard.matchedCount) return { outcome: "college_not_found" };
 
     const now = new Date();
-    const boaResult = await db.collection("boas").updateOne(
+    const boaResult = await coreCollection(db, "boas").updateOne(
       activeFilter({ _id: boa._id }),
       {
         $set: {
@@ -296,7 +296,7 @@ export async function updateBoaGuarded(
     );
     const userSet = { email: input.email, updated_at: now };
     if (passwordHash) userSet.password_hash = passwordHash;
-    const userResult = await db.collection("users").updateOne(
+    const userResult = await coreCollection(db, "users").updateOne(
       { _id: user._id, role: ROLES.BOA },
       { $set: userSet, $inc: { session_version: 1 } },
       { session }
@@ -311,15 +311,15 @@ export async function updateBoaGuarded(
 export async function deleteBoaGuarded(
   db,
   boaId,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const boa = await db.collection("boas").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const boa = await coreCollection(db, "boas").findOne(
       activeFilter({ _id: idMatch(boaId) }),
       { session }
     );
     if (!boa) return { outcome: "not_found" };
-    const user = await db.collection("users").findOne(
+    const user = await coreCollection(db, "users").findOne(
       {
         reference_id: idMatch(String(boa._id)),
         role: ROLES.BOA,
@@ -329,12 +329,12 @@ export async function deleteBoaGuarded(
     if (!user) return { outcome: "account_unavailable" };
 
     const now = new Date();
-    const boaResult = await db.collection("boas").updateOne(
+    const boaResult = await coreCollection(db, "boas").updateOne(
       activeFilter({ _id: boa._id }),
       { $set: { deleted_at: now, updated_at: now } },
       { session }
     );
-    const userResult = await db.collection("users").updateOne(
+    const userResult = await coreCollection(db, "users").updateOne(
       { _id: user._id, role: ROLES.BOA },
       {
         $set: { disabled_at: now, updated_at: now },
@@ -353,21 +353,21 @@ export async function updateCollegeGuarded(
   db,
   collegeId,
   input,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const college = await db.collection("colleges").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(collegeId) }),
       { session }
     );
     if (!college) return { outcome: "not_found" };
-    if (await db.collection("colleges").findOne(
+    if (await coreCollection(db, "colleges").findOne(
       { name: input.name, location: input.location, _id: { $ne: college._id } },
       { session }
     )) {
       return { outcome: "duplicate" };
     }
-    const result = await db.collection("colleges").updateOne(
+    const result = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $set: { ...input, updated_at: new Date() } },
       { session }
@@ -379,22 +379,22 @@ export async function updateCollegeGuarded(
 export async function deleteCollegeGuarded(
   db,
   collegeId,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const college = await db.collection("colleges").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(collegeId) }),
       { session }
     );
     if (!college) return { outcome: "not_found" };
     const collegeMatch = idMatch(String(college._id));
-    if (await db.collection("boas").findOne(
+    if (await coreCollection(db, "boas").findOne(
       activeFilter({ college_id: collegeMatch }),
       { session }
     )) {
       return { outcome: "assigned_boa" };
     }
-    if (await db.collection("instructors").findOne(
+    if (await coreCollection(db, "instructors").findOne(
       activeFilter({ college_id: collegeMatch }),
       { session }
     )) {
@@ -402,7 +402,7 @@ export async function deleteCollegeGuarded(
     }
 
     const now = new Date();
-    const result = await db.collection("colleges").updateOne(
+    const result = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $set: { deleted_at: now, updated_at: now } },
       { session }
@@ -534,7 +534,7 @@ adminRouter.post(
       deleted_at: null,
     });
     try {
-      await req.app.locals.db.collection("colleges").insertOne(college);
+      await coreCollection(req.app.locals.db, "colleges").insertOne(college);
     } catch (error) {
       if (duplicateErrorResponse(error, res, "A college with this name and location already exists")) return;
       throw error;
@@ -551,7 +551,7 @@ adminRouter.get(
     const scope = isElevated(req.currentUser.role)
       ? {}
       : { _id: idMatch(req.currentUser.collegeId) };
-    const rows = await req.app.locals.db.collection("colleges")
+    const rows = await coreCollection(req.app.locals.db, "colleges")
       .find(activeFilter(scope))
       .limit(1000)
       .toArray();
@@ -707,7 +707,7 @@ adminRouter.get(
     const syncedFilter = activeFilter({ source: "bigquery" });
     const [state, records, total] = await Promise.all([
       readSyncState(db),
-      db.collection("instructors")
+      coreCollection(db, "instructors")
         .find(syncedFilter)
         .project({
           instructor_user_id: 1,
@@ -722,7 +722,7 @@ adminRouter.get(
         .sort({ name: 1 })
         .limit(5000)
         .toArray(),
-      db.collection("instructors").countDocuments(syncedFilter),
+      coreCollection(db, "instructors").countDocuments(syncedFilter),
     ]);
     return res.json({
       configured: isSyncConfigured(),
@@ -799,7 +799,7 @@ adminRouter.post(
     const db = req.app.locals.db;
     const { name, email, password } = req.validatedBody;
 
-    if (await db.collection("users").findOne({ email })) {
+    if (await coreCollection(db, "users").findOne({ email })) {
       return res.status(400).json({ detail: "Email already registered" });
     }
 
@@ -819,7 +819,7 @@ adminRouter.post(
     });
 
     try {
-      await db.collection("users").insertOne(user);
+      await coreCollection(db, "users").insertOne(user);
     } catch (error) {
       if (duplicateErrorResponse(error, res, "Email already registered")) return;
       throw error;
@@ -845,13 +845,13 @@ adminRouter.put(
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
     const { name, email, password } = req.validatedBody;
-    const target = await db.collection("users").findOne({ _id: idMatch(String(req.params.id)) });
+    const target = await coreCollection(db, "users").findOne({ _id: idMatch(String(req.params.id)) });
 
     if (!target || ![ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(target.role)) {
       return res.status(404).json({ detail: "Administrator not found" });
     }
 
-    const clash = await db.collection("users").findOne({ email, _id: { $ne: target._id } });
+    const clash = await coreCollection(db, "users").findOne({ email, _id: { $ne: target._id } });
     if (clash) return res.status(400).json({ detail: "Email already registered" });
 
     const update = { name, email, updated_at: new Date() };
@@ -866,7 +866,7 @@ adminRouter.put(
     // whose `sub` claim still carries the old address.
     if (email !== target.email) inc.session_version = 1;
 
-    await db.collection("users").updateOne(
+    await coreCollection(db, "users").updateOne(
       { _id: target._id },
       Object.keys(inc).length ? { $set: update, $inc: inc } : { $set: update }
     );
@@ -880,12 +880,12 @@ adminRouter.post(
   validate(setPasswordSchema),
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const target = await db.collection("users").findOne({ _id: idMatch(String(req.params.id)) });
+    const target = await coreCollection(db, "users").findOne({ _id: idMatch(String(req.params.id)) });
     if (!target || ![ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(target.role)) {
       return res.status(404).json({ detail: "Administrator not found" });
     }
 
-    await db.collection("users").updateOne(
+    await coreCollection(db, "users").updateOne(
       { _id: target._id },
       {
         $set: {
@@ -905,7 +905,7 @@ adminRouter.delete(
   requireRootAdmin,
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const target = await db.collection("users").findOne({ _id: idMatch(String(req.params.id)) });
+    const target = await coreCollection(db, "users").findOne({ _id: idMatch(String(req.params.id)) });
 
     if (!target || ![ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(target.role)) {
       return res.status(404).json({ detail: "Administrator not found" });
@@ -917,7 +917,7 @@ adminRouter.delete(
       return res.status(400).json({ detail: "You cannot delete your own account" });
     }
 
-    await db.collection("users").deleteOne({ _id: target._id });
+    await coreCollection(db, "users").deleteOne({ _id: target._id });
     return res.json({ message: "Administrator deleted successfully" });
   })
 );
@@ -929,12 +929,12 @@ adminRouter.post(
   validate(setPasswordSchema),
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const boa = await db.collection("boas").findOne(
+    const boa = await coreCollection(db, "boas").findOne(
       activeFilter({ _id: idMatch(String(req.params.id)) })
     );
     if (!boa) return res.status(404).json({ detail: "BOA not found" });
 
-    const result = await db.collection("users").updateOne(
+    const result = await coreCollection(db, "users").updateOne(
       activeUserFilter({ reference_id: String(boa._id), role: ROLES.BOA }),
       {
         $set: {
@@ -969,7 +969,7 @@ adminRouter.get(
     const db = req.app.locals.db;
     const [settings, colleges, enrolment] = await Promise.all([
       getIdentificationSettings(db),
-      db.collection("colleges")
+      coreCollection(db, "colleges")
         .find(
           { $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }] },
           { projection: { name: 1 } }
@@ -1032,7 +1032,7 @@ adminRouter.get(
   requireSuperAdmin,
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const user = await db.collection("users").findOne({ _id: idMatch(req.params.userId) });
+    const user = await coreCollection(db, "users").findOne({ _id: idMatch(req.params.userId) });
     if (!user) return res.status(404).json({ detail: "User not found" });
     const settings = await getAccessSettings(db);
     return res.json({
@@ -1058,7 +1058,7 @@ adminRouter.put(
     }
 
     const db = req.app.locals.db;
-    const user = await db.collection("users").findOne({ _id: idMatch(req.params.userId) });
+    const user = await coreCollection(db, "users").findOne({ _id: idMatch(req.params.userId) });
     if (!user) return res.status(404).json({ detail: "User not found" });
     if (user.role !== ROLES.BOA) {
       return res.status(422).json({
@@ -1066,7 +1066,7 @@ adminRouter.put(
       });
     }
 
-    await db.collection("users").updateOne(
+    await coreCollection(db, "users").updateOne(
       { _id: user._id },
       value === null
         ? { $unset: { can_delete_records: "" }, $set: { updated_at: new Date() } }

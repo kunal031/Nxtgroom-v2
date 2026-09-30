@@ -30,15 +30,33 @@ import { getQueueAgeMetrics } from "../src/services/workerHealth.js";
  */
 
 const PREFIX = "test-";
-const ENV_KEYS = ["DB_WRITE_TO", "DB_READ_FROM", "DYNAMODB_REGION", "DYNAMODB_ENDPOINT", "DYNAMODB_TABLE_PREFIX"];
+const QUEUE_KEYS = Object.keys(JOB_QUEUES).flatMap((queue) => [
+  `DB_WRITE_TO_${queue.toUpperCase()}`,
+  `DB_READ_FROM_${queue.toUpperCase()}`,
+]);
+const ENV_KEYS = [
+  "DB_WRITE_TO", "DB_READ_FROM", ...QUEUE_KEYS,
+  "DB_WRITE_TO_EVALUATIONS", "DB_READ_FROM_EVALUATIONS",
+  "DB_WRITE_TO_APP_SETTINGS", "DB_READ_FROM_APP_SETTINGS",
+  "DYNAMODB_REGION", "DYNAMODB_ENDPOINT", "DYNAMODB_TABLE_PREFIX",
+];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 let server;
 let rawClient;
 let client;
 
+/**
+ * Switches the four queues only. The global DB_WRITE_TO would also move
+ * attendance, which these tests keep on MongoDB to watch what the workers
+ * write to it.
+ */
 function setRoute(writeTo, readFrom) {
-  process.env.DB_WRITE_TO = writeTo;
-  process.env.DB_READ_FROM = readFrom;
+  // The evaluation worker stores its reports alongside its jobs, and the
+  // notification worker reads the email settings, so those move with them.
+  for (const store of [...Object.keys(JOB_QUEUES), "evaluations", "app_settings"]) {
+    process.env[`DB_WRITE_TO_${store.toUpperCase()}`] = writeTo;
+    process.env[`DB_READ_FROM_${store.toUpperCase()}`] = readFrom;
+  }
 }
 
 before(async () => {
@@ -211,23 +229,26 @@ function claim(jobs, worker, now = NOW) {
 
 test("claims take the oldest eligible job, and two workers never take the same one", async () => {
   setRoute("dynamo", "dynamo");
-  const jobs = jobCollection(null, "mail_jobs");
+  const jobs = jobCollection(attendanceOnlyMongo(), "mail_jobs");
   for (let index = 0; index < 6; index += 1) {
-    await enqueueMailJob(null, {
+    await enqueueMailJob(attendanceOnlyMongo(), {
       id: `job-${index}`,
       type: "password_reset",
       toEmail: `person${index}@example.com`,
       payload: {},
     });
   }
+  // enqueueMailJob stamps available_at from the real clock, so the claim
+  // time has to be now rather than one of the fixed dates above.
+  const now = new Date();
   // Six workers at once, six jobs: each gets a different one.
-  const claimed = await Promise.all(Array.from({ length: 6 }, (_, index) => claim(jobs, `w${index}`, LATER)));
+  const claimed = await Promise.all(Array.from({ length: 6 }, (_, index) => claim(jobs, `w${index}`, now)));
   assert.equal(new Set(claimed.map((job) => job._id)).size, 6);
   assert.ok(claimed.every((job) => job.status === "processing" && job.attempts === 1));
-  assert.equal(await claim(jobs, "late", LATER), null, "nothing left to claim");
+  assert.equal(await claim(jobs, "late", now), null, "nothing left to claim");
 
   // An expired lease makes the job claimable again, by one worker.
-  const afterLease = new Date(LATER.getTime() + 120_000);
+  const afterLease = new Date(now.getTime() + 120_000);
   const [first, second] = await Promise.all([claim(jobs, "x", afterLease), claim(jobs, "y", afterLease)]);
   assert.ok(first && second && first._id !== second._id);
 });
@@ -309,10 +330,10 @@ test("queue depth and age for /health/ready come from DynamoDB", async () => {
 
 test("deleting an attendance record cancels its jobs, finished ones included", async () => {
   setRoute("dynamo", "dynamo");
-  const jobs = jobCollection(null, "mail_jobs");
-  await enqueueMailJob(null, { id: "r1", type: "attendance_reminder", toEmail: "a@example.com", payload: {}, attendanceId: "att-9" });
-  await enqueueMailJob(null, { id: "r2", type: "grooming_alert", toEmail: "b@example.com", payload: {}, attendanceId: "att-9" });
-  await enqueueMailJob(null, { id: "other", type: "grooming_alert", toEmail: "c@example.com", payload: {}, attendanceId: "att-8" });
+  const jobs = jobCollection(attendanceOnlyMongo(), "mail_jobs");
+  await enqueueMailJob(attendanceOnlyMongo(), { id: "r1", type: "attendance_reminder", toEmail: "a@example.com", payload: {}, attendanceId: "att-9" });
+  await enqueueMailJob(attendanceOnlyMongo(), { id: "r2", type: "grooming_alert", toEmail: "b@example.com", payload: {}, attendanceId: "att-9" });
+  await enqueueMailJob(attendanceOnlyMongo(), { id: "other", type: "grooming_alert", toEmail: "c@example.com", payload: {}, attendanceId: "att-8" });
   // One is already sent: out of the active index, still in by_attendance.
   await jobs.updateOne({ _id: "r2" }, { $set: { status: "sent", expires_at: LATER } });
 

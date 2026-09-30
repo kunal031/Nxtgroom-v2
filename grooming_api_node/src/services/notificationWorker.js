@@ -7,6 +7,7 @@ import { getNotificationSettings, shouldSendNotification } from "./notificationS
 import { createWorkerMonitor } from "./workerHealth.js";
 import { createIdleBackoff, createSweepSchedule, createWakeSignal } from "./workerPacing.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const WORKER_ID = randomUUID();
 const NOTIFICATION_OUTBOX_FIELDS = {
@@ -53,7 +54,7 @@ async function syncNotificationStatus(db, job) {
     set[`${job.type}_email_sent_at`] = job.sent_at || new Date();
     set[`${job.type}_email_message_id`] = job.message_id || null;
   }
-  await db.collection("attendance").updateOne(
+  await coreCollection(db, "attendance").updateOne(
     { _id: job.attendance_id },
     {
       $set: set,
@@ -94,7 +95,7 @@ export async function enqueueNotification(db, {
   assertNotificationType(type);
   const outboxField = notificationOutboxField(type);
   if (!toEmail) {
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendanceId },
       {
         $set: { [`${type}_email_status`]: "skipped_no_email" },
@@ -108,7 +109,7 @@ export async function enqueueNotification(db, {
   // suppressed report never holds recipient PII in the notification queue.
   const settings = await getNotificationSettings(db);
   if (!shouldSendNotification(settings, type, report || {})) {
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendanceId },
       {
         $set: { [`${type}_email_status`]: "skipped_by_settings" },
@@ -147,7 +148,7 @@ export async function enqueueNotification(db, {
 
 async function reconcileNotificationOutbox(db, type) {
   const outboxField = notificationOutboxField(type);
-  const attendance = await db.collection("attendance").findOne(
+  const attendance = await coreCollection(db, "attendance").findOne(
     { [outboxField]: { $exists: true } },
     { sort: { [`${outboxField}.created_at`]: 1 } }
   );
@@ -163,7 +164,7 @@ async function reconcileNotificationOutbox(db, type) {
     ).getTime()
       + NOTIFICATION_DEADLINE_MS);
   if (Number.isNaN(inferredDeadline.getTime()) || inferredDeadline <= new Date()) {
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendance._id, [outboxField]: { $exists: true } },
       {
         $set: { [`${type}_email_status`]: "failed" },
@@ -275,7 +276,7 @@ async function deferCheckoutNotification(db, job) {
 }
 
 async function reportUrlForAttendance(db, attendance, type) {
-  const instructor = await db.collection("instructors").findOne({
+  const instructor = await coreCollection(db, "instructors").findOne({
     _id: idMatch(String(attendance.instructor_id)),
   });
   if (!instructor) {
@@ -297,7 +298,7 @@ async function reportUrlForAttendance(db, attendance, type) {
 
 export async function prepareCheckinReport(db, job) {
   if (job.type !== "checkin") return job;
-  const attendance = await db.collection("attendance").findOne({ _id: job.attendance_id });
+  const attendance = await coreCollection(db, "attendance").findOne({ _id: job.attendance_id });
   if (!attendance) {
     const error = new Error("Attendance record unavailable");
     error.name = "ATTENDANCE_NOT_FOUND";
@@ -313,7 +314,7 @@ export async function prepareCheckinReport(db, job) {
 
 export async function prepareCheckoutReport(db, job) {
   if (job.type !== "checkout") return job;
-  const attendance = await db.collection("attendance").findOne({ _id: job.attendance_id });
+  const attendance = await coreCollection(db, "attendance").findOne({ _id: job.attendance_id });
   if (!attendance) {
     const error = new Error("Attendance record unavailable");
     error.name = "ATTENDANCE_NOT_FOUND";
@@ -360,7 +361,7 @@ export async function prepareCheckoutReport(db, job) {
 }
 
 async function deliverNotification(db, job) {
-  const target = await db.collection("attendance").findOne(
+  const target = await coreCollection(db, "attendance").findOne(
     {
       _id: job.attendance_id,
       deleting_at: { $exists: false },
@@ -384,7 +385,7 @@ async function deliverNotification(db, job) {
     : await prepareCheckinReport(db, job);
   if (!preparedJob) return false;
   if (!(await renewNotificationLease(db, preparedJob))) return false;
-  const stillPresent = await db.collection("attendance").findOne(
+  const stillPresent = await coreCollection(db, "attendance").findOne(
     {
       _id: job.attendance_id,
       deleting_at: { $exists: false },

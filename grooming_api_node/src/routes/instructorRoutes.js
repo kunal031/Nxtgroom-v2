@@ -1,6 +1,5 @@
 import { Router } from "express";
 import multer from "multer";
-import { withMongoTransaction } from "../config/db.js";
 import { idMatch, instructorScope, isElevated, requireSuperAdmin, ROLES } from "../middleware/auth.js";
 import { asyncRoute, createDocument, dateBoundsInTimeZone, parsePagination, serializeDocument } from "../utils.js";
 import { runtimeConfig } from "../config/env.js";
@@ -22,6 +21,7 @@ import {
   isFaceRecognitionConfigured,
 } from "../services/faceRecognition.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection, coreTransaction } from "../stores/coreStore.js";
 
 export const instructorRouter = Router();
 
@@ -104,7 +104,7 @@ export async function loadRecentInstructorFeedbacks(db, instructorIds) {
   const normalizedIdField = "_private_paging_instructor_id";
   const normalizedDateField = "_private_paging_feedback_date";
   const rankField = "_private_paging_feedback_rank";
-  return db.collection("attendance").aggregate([
+  return coreCollection(db, "attendance").aggregate([
     { $match: { instructor_id: { $in: lookupIdVariants(instructorIds) } } },
     {
       $project: {
@@ -145,21 +145,21 @@ export async function loadRecentInstructorFeedbacks(db, instructorIds) {
 export async function createInstructorGuarded(
   db,
   input,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const college = await db.collection("colleges").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(input.college_id) }),
       { session }
     );
     if (!college) return { outcome: "college_not_found" };
-    if (await db.collection("instructors").findOne(
+    if (await coreCollection(db, "instructors").findOne(
       { employee_id: input.employee_id },
       { session }
     )) {
       return { outcome: "duplicate_employee_id" };
     }
-    const collegeGuard = await db.collection("colleges").updateOne(
+    const collegeGuard = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $inc: { [COLLEGE_ASSIGNMENT_GUARD]: 1 } },
       { session }
@@ -174,7 +174,7 @@ export async function createInstructorGuarded(
       updated_at: now,
       deleted_at: null,
     });
-    await db.collection("instructors").insertOne(instructor, { session });
+    await coreCollection(db, "instructors").insertOne(instructor, { session });
     return { outcome: "created", instructor };
   });
 }
@@ -183,10 +183,10 @@ export async function updateInstructorGuarded(
   db,
   instructorId,
   input,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const existing = await db.collection("instructors").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const existing = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(instructorId) }),
       { session }
     );
@@ -201,20 +201,20 @@ export async function updateInstructorGuarded(
     // open yesterday is a missed check-out, not a session in progress.
     const movingCollege = String(existing.college_id) !== String(input.college_id);
     if (movingCollege) {
-      const activeAttendance = await db.collection("attendance").findOne(
+      const activeAttendance = await coreCollection(db, "attendance").findOne(
         openCheckInTodayFilter(existing._id),
         { session }
       );
       if (activeAttendance) return { outcome: "active_attendance" };
     }
 
-    const college = await db.collection("colleges").findOne(
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(input.college_id) }),
       { session }
     );
     if (!college) return { outcome: "college_not_found" };
 
-    const duplicate = await db.collection("instructors").findOne(
+    const duplicate = await coreCollection(db, "instructors").findOne(
       {
         employee_id: input.employee_id,
         _id: { $ne: existing._id },
@@ -223,14 +223,14 @@ export async function updateInstructorGuarded(
     );
     if (duplicate) return { outcome: "duplicate_employee_id" };
 
-    const collegeGuard = await db.collection("colleges").updateOne(
+    const collegeGuard = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $inc: { [COLLEGE_ASSIGNMENT_GUARD]: 1 } },
       { session }
     );
     if (!collegeGuard.matchedCount) return { outcome: "college_not_found" };
 
-    const result = await db.collection("instructors").updateOne(
+    const result = await coreCollection(db, "instructors").updateOne(
       activeFilter({ _id: existing._id }),
       { $set: { ...input, college_id: String(college._id), updated_at: new Date() } },
       { session }
@@ -244,10 +244,10 @@ export async function updateInstructorGuarded(
 export async function deleteInstructorGuarded(
   db,
   instructorId,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const existing = await db.collection("instructors").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const existing = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(instructorId) }),
       { session }
     );
@@ -257,14 +257,14 @@ export async function deleteInstructorGuarded(
     // refuses on any open check-in — but only one belonging to today, since a
     // record left open yesterday is a missed check-out rather than a session
     // in progress, and would otherwise make the instructor undeletable.
-    const activeAttendance = await db.collection("attendance").findOne(
+    const activeAttendance = await coreCollection(db, "attendance").findOne(
       openCheckInTodayFilter(existing._id),
       { session }
     );
     if (activeAttendance) return { outcome: "active_attendance" };
 
     const now = new Date();
-    const result = await db.collection("instructors").updateOne(
+    const result = await coreCollection(db, "instructors").updateOne(
       activeFilter({ _id: existing._id }),
       { $set: { deleted_at: now, updated_at: now } },
       { session }
@@ -335,7 +335,7 @@ instructorRouter.get(
       }
       throw error;
     }
-    const instructors = await db.collection("instructors")
+    const instructors = await coreCollection(db, "instructors")
       .find(activeFilter(instructorScope(req.currentUser)))
       .sort({ name: 1, _id: 1 })
       .skip(pagination.offset)
@@ -476,7 +476,7 @@ instructorRouter.patch(
   validate(instructorGenderSchema),
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const result = await db.collection("instructors").updateOne(
+    const result = await coreCollection(db, "instructors").updateOne(
       activeFilter({
         _id: idMatch(req.params.instructorId),
         ...instructorScope(req.currentUser),
@@ -559,7 +559,7 @@ instructorRouter.post(
     const validation = validateImageUpload(req.file);
     if (!validation.valid) return res.status(400).json({ detail: validation.detail });
 
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(req.params.instructorId) })
     );
     if (!instructor) return res.status(404).json({ detail: "Instructor not found" });
@@ -622,7 +622,7 @@ instructorRouter.post(
     const faceIds = [...keptFaceIds, indexed.faceId];
 
     const now = new Date();
-    const update = await db.collection("instructors").updateOne(
+    const update = await coreCollection(db, "instructors").updateOne(
       activeFilter({ _id: instructor._id }),
       {
         $set: {
@@ -669,7 +669,7 @@ instructorRouter.get(
   requireSuperAdmin,
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(req.params.instructorId) }),
       { projection: { face_ids: 1, reference_photo_key: 1, face_indexed_at: 1 } }
     );
@@ -702,7 +702,7 @@ instructorRouter.delete(
   requireSuperAdmin,
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(req.params.instructorId) })
     );
     if (!instructor) return res.status(404).json({ detail: "Instructor not found" });
@@ -720,7 +720,7 @@ instructorRouter.delete(
     }
 
     const now = new Date();
-    await db.collection("instructors").updateOne(
+    await coreCollection(db, "instructors").updateOne(
       activeFilter({ _id: instructor._id }),
       {
         $set: { face_ids: [], updated_at: now },

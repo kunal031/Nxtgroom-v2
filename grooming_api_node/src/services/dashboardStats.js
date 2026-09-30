@@ -14,6 +14,7 @@ import {
 } from "./identificationSettings.js";
 import { localDateKey } from "./instructorReports.js";
 import { failedCheckpointRows } from "../stores/evaluationStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 /**
  * The administrators' Dashboard: today's attendance and grooming results, the
@@ -374,7 +375,7 @@ export async function loadDashboard(db, { collegeId = null, now = new Date() } =
   const todayKey = localDateKey(now, timeZone);
   const collegeScope = collegeId ? { college_id: idMatch(String(collegeId)) } : {};
 
-  const colleges = await db.collection("colleges")
+  const colleges = await coreCollection(db, "colleges")
     .find(collegeId ? { $and: [{ _id: idMatch(String(collegeId)) }, ACTIVE] } : ACTIVE, { projection: { name: 1 } })
     .sort({ name: 1 })
     .toArray();
@@ -393,10 +394,10 @@ export async function loadDashboard(db, { collegeId = null, now = new Date() } =
   const trendBounds = dateRangeBoundsInTimeZone(trendFrom, todayKey, timeZone);
 
   const [roster, weekRecords, trendRows, unidentifiedByCollege] = await Promise.all([
-    db.collection("instructors")
+    coreCollection(db, "instructors")
       .find({ $and: [ACTIVE, collegeScope] }, { projection: { name: 1, college_id: 1 } })
       .toArray(),
-    db.collection("attendance")
+    coreCollection(db, "attendance")
       .find(
         {
           date: { $gte: recordBounds.start, $lt: recordBounds.end },
@@ -419,7 +420,7 @@ export async function loadDashboard(db, { collegeId = null, now = new Date() } =
         }
       )
       .toArray(),
-    db.collection("attendance").aggregate([
+    coreCollection(db, "attendance").aggregate([
       {
         $match: {
           date: { $gte: trendBounds.start, $lt: trendBounds.end },
@@ -467,7 +468,7 @@ export async function loadDashboard(db, { collegeId = null, now = new Date() } =
         },
       },
     ]).toArray(),
-    db.collection("attendance").aggregate([
+    coreCollection(db, "attendance").aggregate([
       {
         $match: {
           status: "unidentified",
@@ -543,11 +544,11 @@ export async function loadInstituteStats(db, { from = "", to = "", now = new Dat
   const date = { $lt: bounds.end, ...(bounds.start ? { $gte: bounds.start } : {}) };
 
   const [colleges, roster, enrolment, identificationSettings, groups] = await Promise.all([
-    db.collection("colleges").find(ACTIVE, { projection: { name: 1 } }).sort({ name: 1 }).toArray(),
-    db.collection("instructors").find(ACTIVE, { projection: { college_id: 1 } }).toArray(),
+    coreCollection(db, "colleges").find(ACTIVE, { projection: { name: 1 } }).sort({ name: 1 }).toArray(),
+    coreCollection(db, "instructors").find(ACTIVE, { projection: { college_id: 1 } }).toArray(),
     loadCollegeEnrolment(db),
     getIdentificationSettings(db),
-    db.collection("attendance").aggregate([
+    coreCollection(db, "attendance").aggregate([
       { $match: { date, deleting_at: { $exists: false } } },
       {
         $project: {

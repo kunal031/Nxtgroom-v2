@@ -47,6 +47,7 @@ import {
   getNotificationSettings,
   shouldSendWeeklyReport,
 } from "../services/notificationSettings.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 export const reportRouter = Router();
 
@@ -107,7 +108,7 @@ async function loadInstructorWeek(db, instructor, startKey) {
   const to = new Date(`${dates[dates.length - 1]}T23:59:59.999Z`);
   to.setUTCDate(to.getUTCDate() + 1);
 
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find({
       instructor_id: String(instructor._id),
       check_in_time: { $gte: from, $lte: to },
@@ -128,7 +129,7 @@ async function loadInstructorMonth(db, instructor, monthKey) {
   const zone = runtimeConfig().appTimeZone;
   const from = dateBoundsInTimeZone(`${monthKey}-01`, zone).start;
   const to = dateBoundsInTimeZone(`${nextKey}-01`, zone).start;
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find({ instructor_id: String(instructor._id), check_in_time: { $gte: from, $lt: to } })
     .sort({ check_in_time: 1 })
     .toArray();
@@ -220,7 +221,7 @@ reportRouter.get(
     from.setUTCDate(from.getUTCDate() - 1);
     const to = new Date(`${date}T23:59:59.999Z`);
     to.setUTCDate(to.getUTCDate() + 1);
-    const candidates = await db.collection("attendance")
+    const candidates = await coreCollection(db, "attendance")
       .find({ instructor_id: String(instructor._id), check_in_time: { $gte: from, $lte: to } })
       .sort({ check_in_time: 1 })
       .toArray();
@@ -325,7 +326,7 @@ reportRouter.get(
     from.setUTCDate(from.getUTCDate() - 1);
     const to = new Date(`${date}T23:59:59.999Z`);
     to.setUTCDate(to.getUTCDate() + 1);
-    const candidates = await db.collection("attendance")
+    const candidates = await coreCollection(db, "attendance")
       .find({ instructor_id: String(instructor._id), check_in_time: { $gte: from, $lte: to } })
       .sort({ check_in_time: 1 })
       .toArray();
@@ -377,7 +378,7 @@ export async function deliverWeeklyReports(db, startKey) {
   const to = new Date(`${dates[dates.length - 1]}T23:59:59.999Z`);
   to.setUTCDate(to.getUTCDate() + 1);
 
-  const instructorIds = await db.collection("attendance").distinct("instructor_id", {
+  const instructorIds = await coreCollection(db, "attendance").distinct("instructor_id", {
     check_in_time: { $gte: from, $lte: to },
   });
 
@@ -388,7 +389,7 @@ export async function deliverWeeklyReports(db, startKey) {
   const failures = [];
   for (const instructorId of instructorIds) {
     try {
-      const instructor = await db.collection("instructors").findOne({ _id: idMatch(String(instructorId)) });
+      const instructor = await coreCollection(db, "instructors").findOne({ _id: idMatch(String(instructorId)) });
       if (!instructor?.email) {
         skipped += 1;
         continue;
@@ -491,7 +492,7 @@ export async function deliverAttendanceReminders(db) {
   const to = new Date(`${today}T23:59:59.999Z`);
   to.setUTCDate(to.getUTCDate() + 1);
 
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find({ check_in_time: { $gte: from, $lte: to }, check_out_time: null })
     .toArray();
   const todays = records.filter((record) => (
@@ -506,7 +507,7 @@ export async function deliverAttendanceReminders(db) {
     try {
       // Guard against a repeat run sending the same nudge twice.
       if (record.checkout_reminder_sent_at) continue;
-      const instructor = await db.collection("instructors").findOne({ _id: idMatch(String(record.instructor_id)) });
+      const instructor = await coreCollection(db, "instructors").findOne({ _id: idMatch(String(record.instructor_id)) });
       const email = instructor?.email;
       if (!email) continue;
 
@@ -600,7 +601,7 @@ reportRouter.post(
     const dryRun = req.query.dry === "1" || req.query.dry === "true";
 
     if (dryRun) {
-      const would = await db.collection("attendance").countDocuments(openCheckInFilter(day));
+      const would = await coreCollection(db, "attendance").countDocuments(openCheckInFilter(day));
       return res.json({ dry_run: true, day, would_mark: would });
     }
 
@@ -672,7 +673,7 @@ reportRouter.post(
       ...(excludeIds.length ? { _id: { $nin: [...excludeIds] } } : {}),
     });
 
-    const records = await db.collection("attendance")
+    const records = await coreCollection(db, "attendance")
       .find(expiredFilter([]), { projection: { check_in_photo_key: 1, check_out_photo_key: 1 } })
       .limit(PHOTO_PURGE_BATCH)
       .toArray();
@@ -722,7 +723,7 @@ reportRouter.post(
         // storage outage leaves the record intact for the next run rather than
         // orphaning a file nothing points at any more.
         if (Object.keys(cleared).length) {
-          await db.collection("attendance").updateOne(
+          await coreCollection(db, "attendance").updateOne(
             { _id: record._id },
             { $set: { ...cleared, photos_purged_at: new Date() } }
           );
@@ -735,7 +736,7 @@ reportRouter.post(
         more = true;
         break;
       }
-      batch = await db.collection("attendance")
+      batch = await coreCollection(db, "attendance")
         .find(expiredFilter(stuck), { projection: { check_in_photo_key: 1, check_out_photo_key: 1 } })
         .limit(PHOTO_PURGE_BATCH)
         .toArray();

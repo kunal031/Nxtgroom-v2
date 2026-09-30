@@ -5,6 +5,7 @@ import { createWorkerMonitor } from "./workerHealth.js";
 import { createIdleBackoff } from "./workerPacing.js";
 import { getSetting, saveSetting } from "../stores/settingsStore.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const WORKER_ID = randomUUID();
 const LEASE_MS = 60_000;
@@ -70,7 +71,7 @@ export async function reconcileOrphanPhotos(db, now = new Date()) {
   let queued = 0;
   for (const object of page.objects) {
     if (!object.lastModified || now.getTime() - new Date(object.lastModified).getTime() < ORPHAN_GRACE_MS) continue;
-    const referenced = await db.collection("attendance").findOne(
+    const referenced = await coreCollection(db, "attendance").findOne(
       { $or: [{ check_in_photo_key: object.key }, { check_out_photo_key: object.key }] },
       { projection: { _id: 1 } }
     );

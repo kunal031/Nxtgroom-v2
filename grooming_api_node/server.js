@@ -33,6 +33,7 @@ import { checkPhotoStorageConnection } from "./src/services/photoStorage.js";
 import { getWorkerReadiness } from "./src/services/workerHealth.js";
 import { createDocument } from "./src/utils.js";
 import { telemetrySnapshot } from "./src/services/telemetry.js";
+import { coreCollection } from "./src/stores/coreStore.js";
 
 const config = runtimeConfig();
 
@@ -248,7 +249,7 @@ app.use((error, req, res, _next) => {
 export async function seedAdmin(db) {
   const currentConfig = runtimeConfig();
   const now = new Date();
-  let user = await db.collection("users").findOne({ email: currentConfig.adminEmail });
+  let user = await coreCollection(db, "users").findOne({ email: currentConfig.adminEmail });
   if (user?.disabled_at) {
     throw new Error("The configured bootstrap administrator account is disabled");
   }
@@ -256,14 +257,14 @@ export async function seedAdmin(db) {
   // Adopt and rotate one old bootstrap account so an admin@123 hash cannot
   // survive the first production deployment under a different email.
   if (!user) {
-    const legacyBootstrap = await db.collection("users").findOne({
+    const legacyBootstrap = await coreCollection(db, "users").findOne({
       email: "admin@nxtwave.com",
       role: ROLES.SUPER_ADMIN,
       password_version: { $exists: false },
       disabled_at: { $exists: false },
     });
     if (legacyBootstrap) {
-      await db.collection("users").updateOne(
+      await coreCollection(db, "users").updateOne(
         { _id: legacyBootstrap._id },
         {
           $set: {
@@ -283,7 +284,7 @@ export async function seedAdmin(db) {
         password_version: currentConfig.adminPasswordVersion,
       };
     } else {
-      const unknownLegacyAdmin = await db.collection("users").findOne({
+      const unknownLegacyAdmin = await coreCollection(db, "users").findOne({
         role: ROLES.SUPER_ADMIN,
         password_version: { $exists: false },
         disabled_at: { $exists: false },
@@ -306,7 +307,7 @@ export async function seedAdmin(db) {
       created_at: now,
       updated_at: now,
     });
-    await db.collection("users").insertOne(user);
+    await coreCollection(db, "users").insertOne(user);
     console.log("Created the configured bootstrap administrator.");
   }
 
@@ -314,7 +315,7 @@ export async function seedAdmin(db) {
     throw new Error("ADMIN_EMAIL belongs to a non-administrator account");
   }
   if (currentConfig.adminPasswordReset) {
-    await db.collection("users").updateOne(
+    await coreCollection(db, "users").updateOne(
       { _id: user._id },
       {
         $set: {
@@ -333,12 +334,12 @@ export async function seedAdmin(db) {
     );
   } else if (user.password_version !== currentConfig.adminPasswordVersion) {
     // Recorded, not acted on. The stored password stays exactly as it is.
-    await db.collection("users").updateOne(
+    await coreCollection(db, "users").updateOne(
       { _id: user._id },
       { $set: { password_version: currentConfig.adminPasswordVersion, updated_at: now } }
     );
   }
-  const unmanagedLegacyAdmin = await db.collection("users").findOne(
+  const unmanagedLegacyAdmin = await coreCollection(db, "users").findOne(
     {
       role: ROLES.SUPER_ADMIN,
       email: { $ne: currentConfig.adminEmail },

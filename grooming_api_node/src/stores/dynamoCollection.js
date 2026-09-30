@@ -26,6 +26,8 @@ import { fromItem, isConditionFailure, toItem, upsertExpression } from "./dynamo
  */
 
 const MAX_CLAIM_CANDIDATES = 25;
+// How many times a claim re-reads the queue after losing every candidate.
+const CLAIM_ROUNDS = 3;
 
 function unsupported(what) {
   return new Error(`Unsupported for DynamoDB: ${what}`);
@@ -251,11 +253,17 @@ export function dynamoCollection(definition) {
       if (id !== undefined) return documentFromItem(await update(id, filter, mongoUpdate, { upsert }));
       if (upsert) throw unsupported("findOneAndUpdate upsert without _id");
       // Oldest first, as MongoDB's sort would; a candidate another worker
-      // took first fails its condition and the next one is tried.
-      const ordered = sortDocuments(await candidates(filter), sort).slice(0, MAX_CLAIM_CANDIDATES);
-      for (const candidate of ordered) {
-        const item = await update(candidate._id, { ...filter, _id: candidate._id }, mongoUpdate);
-        if (item) return documentFromItem(item);
+      // took first fails its condition and the next one is tried. The list
+      // is read again after every candidate has been lost, because workers
+      // polling together see the same order and race down it in step: what
+      // is left by then is not what this worker first saw.
+      for (let round = 1; round <= CLAIM_ROUNDS; round += 1) {
+        const ordered = sortDocuments(await candidates(filter), sort).slice(0, MAX_CLAIM_CANDIDATES);
+        if (!ordered.length) return null;
+        for (const candidate of ordered) {
+          const item = await update(candidate._id, { ...filter, _id: candidate._id }, mongoUpdate);
+          if (item) return documentFromItem(item);
+        }
       }
       return null;
     },

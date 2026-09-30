@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { runtimeConfig } from "../config/env.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 /**
  * Per-instructor report links.
@@ -16,7 +17,7 @@ const TOKEN_BYTES = 24;
 export async function ensureReportToken(db, instructor) {
   if (instructor?.report_token) return instructor.report_token;
   const token = crypto.randomBytes(TOKEN_BYTES).toString("base64url");
-  const result = await db.collection("instructors").findOneAndUpdate(
+  const result = await coreCollection(db, "instructors").findOneAndUpdate(
     {
       _id: instructor._id,
       $or: [
@@ -30,7 +31,7 @@ export async function ensureReportToken(db, instructor) {
   );
   const claimed = result?.value || result;
   if (claimed?.report_token) return claimed.report_token;
-  const authoritative = await db.collection("instructors").findOne(
+  const authoritative = await coreCollection(db, "instructors").findOne(
     { _id: instructor._id },
     { projection: { report_token: 1 } }
   );
@@ -40,7 +41,7 @@ export async function ensureReportToken(db, instructor) {
 
 export async function findInstructorByReportToken(db, token) {
   if (!token || typeof token !== "string" || token.length > 128) return null;
-  return db.collection("instructors").findOne({ report_token: token });
+  return coreCollection(db, "instructors").findOne({ report_token: token });
 }
 
 /** Formats a Date as YYYY-MM-DD in the configured business timezone. */

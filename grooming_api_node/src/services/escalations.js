@@ -4,6 +4,7 @@ import {
   nonCompliantOccurrences,
   weekStartKey,
 } from "./evaluationWorker.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 /**
  * Which instructors are in escalation, for the rows of a Daily Records page.
@@ -34,7 +35,7 @@ export async function weeklyEscalations(db, rows, scope = {}) {
   const weeks = [...new Set([...weeksByInstructor.values()].flatMap((set) => [...set]))];
   const days = weeks.flatMap((week) => Array.from({ length: 7 }, (_, offset) => addDaysToKey(week, offset)));
 
-  const records = await db.collection("attendance").find(
+  const records = await coreCollection(db, "attendance").find(
     {
       instructor_id: { $in: [...weeksByInstructor.keys()] },
       attendance_day: { $in: days },
