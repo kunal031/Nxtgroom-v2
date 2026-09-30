@@ -144,8 +144,9 @@ startup may create missing indexes automatically after the same audit passes.
 
 Data is moving from MongoDB to DynamoDB one collection at a time; see
 `docs/DYNAMODB_MIGRATION_PLAN.md`. Migrated so far: `app_settings`,
-`report_delivery_runs` and `evaluations`, none of which takes part in a
-MongoDB transaction. The collections that share transactions (colleges,
+`report_delivery_runs`, `evaluations` and the four job queues
+(`evaluation_jobs`, `notification_jobs`, `mail_jobs`,
+`storage_cleanup_jobs`), none of which takes part in a MongoDB transaction. The collections that share transactions (colleges,
 BOAs, users, instructors, attendance) move together, last. With the
 switches unset, everything stays on MongoDB and none of this is needed.
 
@@ -161,7 +162,8 @@ switches unset, everything stays on MongoDB and none of this is needed.
          "Effect": "Allow",
          "Action": [
            "dynamodb:DescribeTable", "dynamodb:CreateTable", "dynamodb:TagResource",
-           "dynamodb:UpdateContinuousBackups", "dynamodb:GetItem", "dynamodb:PutItem",
+           "dynamodb:UpdateContinuousBackups", "dynamodb:UpdateTimeToLive",
+           "dynamodb:GetItem", "dynamodb:PutItem",
            "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query",
            "dynamodb:Scan", "dynamodb:BatchWriteItem", "dynamodb:BatchGetItem",
            "dynamodb:ConditionCheckItem"
@@ -202,6 +204,16 @@ switches unset, everything stays on MongoDB and none of this is needed.
 
 6. After a clean week, move reads: `DB_READ_FROM=dynamo`. To undo either
    step, set the value back to `mongo` and redeploy.
+
+The job queues are switched as a group, with the four per-queue settings
+(`DB_WRITE_TO_EVALUATION_JOBS`, `DB_WRITE_TO_NOTIFICATION_JOBS`,
+`DB_WRITE_TO_MAIL_JOBS`, `DB_WRITE_TO_STORAGE_CLEANUP_JOBS`, and the same
+for `DB_READ_FROM_`). While both are written, the database reads come from
+does the work and each changed job is then copied to the other, so the two
+never pick different jobs. Move their reads after 9 PM, once
+`/health/ready` shows every queue at depth 0. Finished jobs expire after a
+week through DynamoDB's time to live, which `dynamo:tables:apply` switches
+on; it needs `dynamodb:UpdateTimeToLive` in the policy above.
 
 ### Amazon SES
 
