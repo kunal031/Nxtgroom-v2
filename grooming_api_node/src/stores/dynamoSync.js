@@ -61,14 +61,19 @@ function canonical(value) {
 }
 
 export async function compareCollectionWithDynamo(db, client, { store, tableName }) {
-  const { itemFromDocument, keyOf } = dynamoTableDefinition(store);
+  const { itemFromDocument, keyOf, ignoreOnCompare = [] } = dynamoTableDefinition(store);
+  const comparable = (item) => {
+    const copy = { ...item };
+    for (const field of ignoreOnCompare) delete copy[field];
+    return canonical(copy);
+  };
   const mongo = new Map();
   for await (const document of db.collection(store).find({})) {
     const item = itemFromDocument(document);
-    mongo.set(keyOf(item), canonical(item));
+    mongo.set(keyOf(item), comparable(item));
   }
   const dynamo = new Map();
-  for (const item of await scanAll(client, tableName)) dynamo.set(keyOf(item), canonical(item));
+  for (const item of await scanAll(client, tableName)) dynamo.set(keyOf(item), comparable(item));
 
   const onlyInMongo = [...mongo.keys()].filter((id) => !dynamo.has(id));
   const onlyInDynamo = [...dynamo.keys()].filter((id) => !mongo.has(id));

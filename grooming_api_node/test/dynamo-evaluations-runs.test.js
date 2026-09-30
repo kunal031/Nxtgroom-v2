@@ -30,7 +30,15 @@ import {
 const PREFIX = "test-";
 const EVALUATIONS = `${PREFIX}evaluations`;
 const RUNS = `${PREFIX}report_delivery_runs`;
-const ENV_KEYS = ["DB_WRITE_TO", "DB_READ_FROM", "DYNAMODB_REGION", "DYNAMODB_ENDPOINT", "DYNAMODB_TABLE_PREFIX"];
+const ENV_KEYS = [
+  "DB_WRITE_TO",
+  "DB_READ_FROM",
+  "DB_WRITE_TO_REPORT_DELIVERY_RUNS",
+  "DB_READ_FROM_REPORT_DELIVERY_RUNS",
+  "DYNAMODB_REGION",
+  "DYNAMODB_ENDPOINT",
+  "DYNAMODB_TABLE_PREFIX",
+];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 let server;
@@ -271,8 +279,15 @@ test("a delivery run counts outcomes and completes only when all are in", async 
   assert.equal(Item.status, "completed");
 });
 
-test("the reminder cron keeps its run on DynamoDB while everything else stays on MongoDB", async () => {
-  setRoute("dynamo", "dynamo");
+test("the reminder cron keeps its run on DynamoDB while everything else stays on MongoDB", async (t) => {
+  // Only this store is switched; the mail queue stays on MongoDB.
+  setRoute("mongo", "mongo");
+  process.env.DB_WRITE_TO_REPORT_DELIVERY_RUNS = "dynamo";
+  process.env.DB_READ_FROM_REPORT_DELIVERY_RUNS = "dynamo";
+  t.after(() => {
+    delete process.env.DB_WRITE_TO_REPORT_DELIVERY_RUNS;
+    delete process.env.DB_READ_FROM_REPORT_DELIVERY_RUNS;
+  });
   const mailJobs = [];
   const { recordRunTerminal } = await import("../src/services/mailWorker.js");
   const db = {

@@ -1,3 +1,11 @@
+import { isJobQueue, jobCollection } from "../stores/jobStore.js";
+
+// The queue depths read the job queues wherever they live; the outbox depths
+// read attendance, which is still MongoDB.
+function collectionFor(db, name) {
+  return isJobQueue(name) ? jobCollection(db, name) : db.collection(name);
+}
+
 const workerStates = new Map();
 const EXPECTED_WORKERS = ["evaluation", "notification"];
 const KNOWN_WORKERS = [...EXPECTED_WORKERS, "storage_cleanup", "mail"];
@@ -144,7 +152,7 @@ function queueMetric(name, document, datePath, now, warningAgeMs, criticalAgeMs,
 }
 
 async function oldest(db, collectionName, filter, sortField) {
-  return db.collection(collectionName).findOne(
+  return collectionFor(db, collectionName).findOne(
     filter,
     {
       projection: { _id: 1, [sortField]: 1 },
@@ -155,7 +163,7 @@ async function oldest(db, collectionName, filter, sortField) {
 }
 
 async function queueDepth(db, collectionName, filter) {
-  const collection = db.collection(collectionName);
+  const collection = collectionFor(db, collectionName);
   if (typeof collection.countDocuments !== "function") return null;
   return collection.countDocuments(filter, { maxTimeMS: 1500 });
 }

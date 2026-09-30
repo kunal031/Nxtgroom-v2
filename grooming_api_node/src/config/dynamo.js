@@ -16,7 +16,15 @@ import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
  */
 
 /** Collections that have a DynamoDB implementation. Grows as stores move. */
-export const DYNAMO_STORES = Object.freeze(["app_settings", "report_delivery_runs", "evaluations"]);
+export const DYNAMO_STORES = Object.freeze([
+  "app_settings",
+  "report_delivery_runs",
+  "evaluations",
+  "evaluation_jobs",
+  "notification_jobs",
+  "mail_jobs",
+  "storage_cleanup_jobs",
+]);
 
 const WRITE_TARGETS = ["mongo", "both", "dynamo"];
 const READ_SOURCES = ["mongo", "dynamo"];

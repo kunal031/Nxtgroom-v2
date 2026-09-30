@@ -19,6 +19,7 @@ import { idMatch } from "../middleware/auth.js";
 import { reportRecipientsFor } from "./reportRecipients.js";
 import { ensureReportToken, localDateKey } from "./instructorReports.js";
 import { appUrl } from "../config/env.js";
+import { jobCollection } from "../stores/jobStore.js";
 
 const WORKER_ID = randomUUID();
 const EVALUATION_OUTBOX_FIELD = "_private_evaluation_outbox";
@@ -454,7 +455,7 @@ export async function enqueueEvaluation(db, payload) {
   const deadlineAt = payload.deadlineAt || new Date(now.getTime() + EVALUATION_DEADLINE_MS);
   const kind = payload.kind === "checkout" ? "checkout" : "checkin";
   const jobId = evaluationJobId(payload.attendanceId, kind);
-  await db.collection("evaluation_jobs").updateOne(
+  await jobCollection(db, "evaluation_jobs").updateOne(
     { _id: jobId },
     {
       $setOnInsert: {
@@ -482,7 +483,7 @@ export async function enqueueEvaluation(db, payload) {
     },
     { upsert: true }
   );
-  const storedJob = await db.collection("evaluation_jobs").findOne(
+  const storedJob = await jobCollection(db, "evaluation_jobs").findOne(
     { _id: jobId },
     { projection: { status: 1 } }
   );
@@ -547,7 +548,7 @@ async function claimEvaluation(db) {
   const now = new Date();
   const config = runtimeConfig();
   const legacyCutoff = new Date(now.getTime() - EVALUATION_DEADLINE_MS);
-  const result = await db.collection("evaluation_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "evaluation_jobs").findOneAndUpdate(
     {
       attempts: { $lt: config.evaluationMaxAttempts },
       $and: [
@@ -595,7 +596,7 @@ async function evaluationTargetExists(db, job) {
 
 async function renewEvaluationLease(db, job) {
   const now = new Date();
-  const result = await db.collection("evaluation_jobs").updateOne(
+  const result = await jobCollection(db, "evaluation_jobs").updateOne(
     {
       _id: job._id,
       status: "processing",
@@ -718,7 +719,7 @@ async function syncStoredEvaluation(db, job, evaluation, ownedStatus) {
     });
 
     if (job._id) {
-      await db.collection("evaluation_jobs").deleteOne({
+      await jobCollection(db, "evaluation_jobs").deleteOne({
         _id: job._id,
         worker_id: WORKER_ID,
         status: ownedStatus,
@@ -790,7 +791,7 @@ async function syncStoredEvaluation(db, job, evaluation, ownedStatus) {
     checkInTime: job.check_in_time,
     kind: jobKind(job),
   });
-  await db.collection("evaluation_jobs").deleteOne({
+  await jobCollection(db, "evaluation_jobs").deleteOne({
     _id: job._id,
     worker_id: WORKER_ID,
     status: ownedStatus,
@@ -804,7 +805,7 @@ export { evaluationFilter };
 async function completeEvaluation(db, job, report) {
   if (!(await renewEvaluationLease(db, job))) return false;
   if (!(await evaluationTargetExists(db, job))) {
-    await db.collection("evaluation_jobs").deleteOne({
+    await jobCollection(db, "evaluation_jobs").deleteOne({
       _id: job._id,
       status: "processing",
       worker_id: WORKER_ID,
@@ -929,7 +930,7 @@ async function terminalizeEvaluationOutbox(db, attendance, payload, code) {
     check_in_time: payload?.check_in_time || attendance.check_in_time,
   };
   const failureNotification = buildFailureNotification(sourceJob, now);
-  await db.collection("evaluation_jobs").updateOne(
+  await jobCollection(db, "evaluation_jobs").updateOne(
     { _id: jobId },
     {
       $setOnInsert: {
@@ -947,7 +948,7 @@ async function terminalizeEvaluationOutbox(db, attendance, payload, code) {
     },
     { upsert: true }
   );
-  const storedJob = await db.collection("evaluation_jobs").findOne({ _id: jobId });
+  const storedJob = await jobCollection(db, "evaluation_jobs").findOne({ _id: jobId });
   if (storedJob?.status === "failed" && !storedJob.failure_synced_at) {
     await syncFailedEvaluationOutcome(db, storedJob);
     return;
@@ -990,7 +991,7 @@ export async function syncFailedEvaluationOutcome(db, job) {
     }
   );
 
-  await db.collection("evaluation_jobs").updateOne(
+  await jobCollection(db, "evaluation_jobs").updateOne(
     { _id: job._id, status: "failed", failure_synced_at: { $exists: false } },
     {
       $set: {
@@ -1042,7 +1043,7 @@ async function markEvaluationFailed(db, job, error, ownedStatus = "processing") 
     });
   }
   const failureNotification = buildFailureNotification(job, now);
-  const result = await db.collection("evaluation_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "evaluation_jobs").findOneAndUpdate(
     { _id: job._id, worker_id: WORKER_ID, status: ownedStatus },
     {
       $set: {
@@ -1070,7 +1071,7 @@ async function markEvaluationFailed(db, job, error, ownedStatus = "processing") 
 }
 
 export async function reconcileFailedEvaluationOutcomes(db) {
-  const job = await db.collection("evaluation_jobs").findOne(
+  const job = await jobCollection(db, "evaluation_jobs").findOne(
     { status: "failed", failure_synced_at: { $exists: false } },
     { sort: { failed_at: 1 } }
   );
@@ -1126,7 +1127,7 @@ export async function retryEvaluation(db, job, error) {
     await markEvaluationFailed(db, job, error);
     return;
   }
-  await db.collection("evaluation_jobs").updateOne(
+  await jobCollection(db, "evaluation_jobs").updateOne(
     { _id: job._id, worker_id: WORKER_ID, status: "processing" },
     {
       $set: {
@@ -1146,7 +1147,7 @@ export async function retryEvaluation(db, job, error) {
  */
 export async function reconcileExpiredEvaluationJobs(db, now = new Date()) {
   const config = runtimeConfig();
-  const result = await db.collection("evaluation_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "evaluation_jobs").findOneAndUpdate(
     {
       status: { $in: ["processing", "recovering"] },
       attempts: { $gte: config.evaluationMaxAttempts },
@@ -1177,7 +1178,7 @@ export async function reconcileExpiredEvaluationJobs(db, now = new Date()) {
     }
     return true;
   } catch (error) {
-    await db.collection("evaluation_jobs").updateOne(
+    await jobCollection(db, "evaluation_jobs").updateOne(
       { _id: job._id, worker_id: WORKER_ID, status: "recovering" },
       {
         $set: {
@@ -1196,7 +1197,7 @@ export async function reconcileExpiredEvaluationJobs(db, now = new Date()) {
 export async function reconcileOverdueEvaluationJobs(db, now = new Date()) {
   const config = runtimeConfig();
   const legacyCutoff = new Date(now.getTime() - EVALUATION_DEADLINE_MS);
-  const result = await db.collection("evaluation_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "evaluation_jobs").findOneAndUpdate(
     {
       $and: [
         {
@@ -1237,7 +1238,7 @@ export async function reconcileOverdueEvaluationJobs(db, now = new Date()) {
     }
     return true;
   } catch (error) {
-    await db.collection("evaluation_jobs").updateOne(
+    await jobCollection(db, "evaluation_jobs").updateOne(
       { _id: job._id, worker_id: WORKER_ID, status: "recovering" },
       {
         $set: {
@@ -1299,7 +1300,7 @@ export function startEvaluationWorker(db) {
   const processJob = async (job) => {
     try {
       if (!(await evaluationTargetExists(db, job))) {
-        await db.collection("evaluation_jobs").deleteOne({
+        await jobCollection(db, "evaluation_jobs").deleteOne({
           _id: job._id,
           status: "processing",
           worker_id: WORKER_ID,

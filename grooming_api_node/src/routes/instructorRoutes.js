@@ -21,6 +21,7 @@ import {
   indexFace,
   isFaceRecognitionConfigured,
 } from "../services/faceRecognition.js";
+import { jobCollection } from "../stores/jobStore.js";
 
 export const instructorRouter = Router();
 
@@ -501,7 +502,7 @@ instructorRouter.patch(
 async function queuePhotoCleanup(db, key, reason, lastError) {
   if (!key) return;
   const now = new Date();
-  await db.collection("storage_cleanup_jobs").updateOne(
+  await jobCollection(db, "storage_cleanup_jobs").updateOne(
     { _id: key },
     {
       $setOnInsert: {

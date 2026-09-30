@@ -31,6 +31,7 @@ if (!config.region && !config.endpoint) {
     for (const name of report.missing) console.log(`missing  ${name}`);
     for (const problem of report.conflicts) console.log(`CONFLICT ${problem}`);
     for (const name of report.backups) console.log(`backups  ${name} (point-in-time recovery on)`);
+    for (const name of report.expiry) console.log(`expiry   ${name} (finished jobs removed after a week)`);
     for (const name of report.backupsPending) {
       console.log(`WAITING  ${name}: AWS is still preparing backups; run this command again in a few minutes`);
     }

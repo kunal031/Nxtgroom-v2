@@ -6,6 +6,7 @@ import { ensureReportToken, localDateKey } from "./instructorReports.js";
 import { getNotificationSettings, shouldSendNotification } from "./notificationSettings.js";
 import { createWorkerMonitor } from "./workerHealth.js";
 import { createIdleBackoff, createSweepSchedule, createWakeSignal } from "./workerPacing.js";
+import { jobCollection } from "../stores/jobStore.js";
 
 const WORKER_ID = randomUUID();
 const NOTIFICATION_OUTBOX_FIELDS = {
@@ -69,7 +70,7 @@ async function syncNotificationStatus(db, job) {
         last_error: errorCode({ code: job.last_error }, "NOTIFICATION_ERROR"),
       } : {}),
     };
-    await db.collection("notification_jobs").updateOne(
+    await jobCollection(db, "notification_jobs").updateOne(
       { _id: job._id, status: job.status, attendance_synced_at: { $exists: false } },
       {
         $set: terminalSet,
@@ -119,7 +120,7 @@ export async function enqueueNotification(db, {
 
   const now = new Date();
   const jobId = `${attendanceId}:${type}`;
-  await db.collection("notification_jobs").updateOne(
+  await jobCollection(db, "notification_jobs").updateOne(
     { _id: jobId },
     {
       $setOnInsert: {
@@ -137,7 +138,7 @@ export async function enqueueNotification(db, {
     },
     { upsert: true }
   );
-  const job = await db.collection("notification_jobs").findOne({ _id: jobId });
+  const job = await jobCollection(db, "notification_jobs").findOne({ _id: jobId });
   if (!job) throw new Error("Notification job could not be persisted");
   await syncNotificationStatus(db, job);
   if (job.status === "queued") notificationQueued.notify();
@@ -206,7 +207,7 @@ async function claimNotification(db) {
   const now = new Date();
   const config = runtimeConfig();
   const legacyCutoff = new Date(now.getTime() - NOTIFICATION_DEADLINE_MS);
-  const result = await db.collection("notification_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "notification_jobs").findOneAndUpdate(
     {
       attempts: { $lt: config.notificationMaxAttempts },
       $and: [
@@ -239,7 +240,7 @@ async function claimNotification(db) {
 async function renewNotificationLease(db, job) {
   const now = new Date();
   const config = runtimeConfig();
-  const result = await db.collection("notification_jobs").updateOne(
+  const result = await jobCollection(db, "notification_jobs").updateOne(
     {
       _id: job._id,
       status: "processing",
@@ -258,7 +259,7 @@ async function renewNotificationLease(db, job) {
 }
 
 async function deferCheckoutNotification(db, job) {
-  const result = await db.collection("notification_jobs").updateOne(
+  const result = await jobCollection(db, "notification_jobs").updateOne(
     { _id: job._id, status: "processing", worker_id: WORKER_ID },
     {
       $set: {
@@ -371,7 +372,7 @@ async function deliverNotification(db, job) {
     { projection: { _id: 1 } }
   );
   if (!target) {
-    await db.collection("notification_jobs").deleteOne({
+    await jobCollection(db, "notification_jobs").deleteOne({
       _id: job._id,
       status: "processing",
       worker_id: WORKER_ID,
@@ -395,7 +396,7 @@ async function deliverNotification(db, job) {
     { projection: { _id: 1 } }
   );
   if (!stillPresent) {
-    await db.collection("notification_jobs").deleteOne({
+    await jobCollection(db, "notification_jobs").deleteOne({
       _id: job._id,
       status: "processing",
       worker_id: WORKER_ID,
@@ -415,7 +416,7 @@ async function deliverNotification(db, job) {
   }
 
   const now = new Date();
-  const transition = await db.collection("notification_jobs").findOneAndUpdate(
+  const transition = await jobCollection(db, "notification_jobs").findOneAndUpdate(
     { _id: preparedJob._id, status: "processing", worker_id: WORKER_ID },
     {
       $set: {
@@ -461,7 +462,7 @@ async function deliverNotification(db, job) {
     message_id: result.messageId || null,
     sent_at: now,
   };
-  await db.collection("notification_jobs").updateOne(
+  await jobCollection(db, "notification_jobs").updateOne(
     { _id: preparedJob._id },
     {
       $set: {
@@ -504,7 +505,7 @@ async function retryNotification(db, job, error) {
   const exhausted = job.attempts >= runtimeConfig().notificationMaxAttempts
     || NON_RETRYABLE_DELIVERY_REASONS.has(errorCode(error));
   if (!exhausted) {
-    await db.collection("notification_jobs").updateOne(
+    await jobCollection(db, "notification_jobs").updateOne(
       { _id: job._id, worker_id: WORKER_ID, status: "processing" },
       {
         $set: {
@@ -518,7 +519,7 @@ async function retryNotification(db, job, error) {
     return;
   }
 
-  const transition = await db.collection("notification_jobs").findOneAndUpdate(
+  const transition = await jobCollection(db, "notification_jobs").findOneAndUpdate(
     { _id: job._id, worker_id: WORKER_ID, status: "processing" },
     {
       $set: {
@@ -543,7 +544,7 @@ async function retryNotification(db, job, error) {
 /** Clears recipient/report PII when a notification cannot be delivered within 24 hours. */
 export async function reconcileOverdueNotificationJobs(db, now = new Date()) {
   const legacyCutoff = new Date(now.getTime() - NOTIFICATION_DEADLINE_MS);
-  let result = await db.collection("notification_jobs").findOneAndUpdate(
+  let result = await jobCollection(db, "notification_jobs").findOneAndUpdate(
     {
       status: "queued",
       $or: [
@@ -569,7 +570,7 @@ export async function reconcileOverdueNotificationJobs(db, now = new Date()) {
   );
   let terminalJob = result?.value || result;
   if (!terminalJob) {
-    result = await db.collection("notification_jobs").findOneAndUpdate(
+    result = await jobCollection(db, "notification_jobs").findOneAndUpdate(
       {
         status: "processing",
         lease_until: { $lte: now },
@@ -608,7 +609,7 @@ export async function reconcileOverdueNotificationJobs(db, now = new Date()) {
  */
 export async function reconcileExpiredNotificationJobs(db, now = new Date()) {
   const config = runtimeConfig();
-  const result = await db.collection("notification_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "notification_jobs").findOneAndUpdate(
     {
       status: "processing",
       attempts: { $gte: config.notificationMaxAttempts },
@@ -637,7 +638,7 @@ export async function reconcileExpiredNotificationJobs(db, now = new Date()) {
 }
 
 export async function reconcileNotificationOutcome(db) {
-  const job = await db.collection("notification_jobs").findOne(
+  const job = await jobCollection(db, "notification_jobs").findOne(
     {
       status: { $in: [...TERMINAL_STATUSES] },
       attendance_synced_at: { $exists: false },
