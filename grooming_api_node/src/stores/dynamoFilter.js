@@ -10,13 +10,24 @@ import { toItem } from "./dynamoItems.js";
  *   Query before the conditional write confirms them.
  *
  * Supported: equality (including null, which like MongoDB also matches a
- * missing field), $ne, $lt, $lte, $gt, $gte, $in, $exists, $and, $or.
+ * missing field), $ne, $lt, $lte, $gt, $gte, $in, $nin, $exists,
+ * $type: "string", $and, $or, and dotted paths into nested objects.
  * Anything else throws, so an unsupported filter fails a test rather than
  * silently matching the wrong documents.
  */
 
 const COMPARISONS = { $lt: "<", $lte: "<=", $gt: ">", $gte: ">=" };
-const OPERATORS = new Set(["$ne", "$in", "$exists", ...Object.keys(COMPARISONS)]);
+const OPERATORS = new Set(["$ne", "$in", "$nin", "$exists", "$type", ...Object.keys(COMPARISONS)]);
+
+/** The value at a dotted path, e.g. "_private_evaluation_outbox.created_at". */
+export function getPath(document, path) {
+  let value = document;
+  for (const part of path.split(".")) {
+    if (value === null || value === undefined || typeof value !== "object") return undefined;
+    value = value[part];
+  }
+  return value;
+}
 
 function isOperatorObject(value) {
   return Boolean(value)
@@ -68,6 +79,11 @@ function fieldMatches(value, condition) {
       return operand === null ? value !== null && value !== undefined : !equal(value, operand);
     }
     if (operator === "$in") return operand.some((candidate) => fieldMatches(value, candidate));
+    if (operator === "$nin") return !operand.some((candidate) => fieldMatches(value, candidate));
+    if (operator === "$type") {
+      if (operand !== "string") throw unsupported(`$type ${operand}`);
+      return typeof value === "string";
+    }
     return compare(value, operator, operand);
   });
 }
@@ -77,8 +93,7 @@ export function matchesFilter(document, filter = {}) {
     if (field === "$and") return condition.every((part) => matchesFilter(document, part));
     if (field === "$or") return condition.some((part) => matchesFilter(document, part));
     if (field.startsWith("$")) throw unsupported(field);
-    if (field.includes(".")) throw unsupported(`dotted path ${field}`);
-    return fieldMatches(document?.[field], condition);
+    return fieldMatches(getPath(document, field), condition);
   });
 }
 
@@ -89,8 +104,8 @@ export function sortDocuments(documents, sort) {
   if (entries.length > 1) throw unsupported("sort on more than one field");
   const [[field, direction]] = entries;
   return [...documents].sort((left, right) => {
-    const a = comparable(left[field]);
-    const b = comparable(right[field]);
+    const a = comparable(getPath(left, field));
+    const b = comparable(getPath(right, field));
     const aMissing = a === undefined || a === null;
     const bMissing = b === undefined || b === null;
     let order = 0;
@@ -118,7 +133,6 @@ export function conditionExpression(filter, expression, { keyAttribute = "_id" }
       return `(${parts.join(field === "$and" ? " AND " : " OR ")})`;
     }
     if (field.startsWith("$")) throw unsupported(field);
-    if (field.includes(".")) throw unsupported(`dotted path ${field}`);
     return fieldCondition(field, condition, expression, never);
   });
   return clauses.join(" AND ");
@@ -126,7 +140,8 @@ export function conditionExpression(filter, expression, { keyAttribute = "_id" }
 
 function fieldCondition(field, condition, expression, never) {
   // Registered only when used: DynamoDB rejects a name no expression uses.
-  const name = () => expression.name(field);
+  // A dotted path becomes one placeholder per segment: #a.#b.
+  const name = () => field.split(".").map((part) => expression.name(part)).join(".");
   if (!isOperatorObject(condition)) {
     if (condition === null) return `(attribute_not_exists(${name()}) OR ${name()} = ${expression.value(null)})`;
     return `${name()} = ${expression.value(condition)}`;
@@ -143,6 +158,16 @@ function fieldCondition(field, condition, expression, never) {
       if (!operand.length) return never();
       if (operand.some((value) => value === null)) throw unsupported("$in with null");
       return `${name()} IN (${operand.map((value) => expression.value(value)).join(", ")})`;
+    }
+    if (operator === "$nin") {
+      // Excluding nothing: always true. The key attribute always exists.
+      if (!operand.length) return `attribute_exists(${expression.name("_id")})`;
+      if (operand.some((value) => value === null)) throw unsupported("$nin with null");
+      return `(attribute_not_exists(${name()}) OR NOT (${name()} IN (${operand.map((value) => expression.value(value)).join(", ")})))`;
+    }
+    if (operator === "$type") {
+      if (operand !== "string") throw unsupported(`$type ${operand}`);
+      return `attribute_type(${name()}, ${expression.value("S")})`;
     }
     return `${name()} ${COMPARISONS[operator]} ${expression.value(operand)}`;
   }).join(" AND ");

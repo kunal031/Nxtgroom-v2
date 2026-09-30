@@ -44,6 +44,14 @@ jobs:
           cache: npm
           cache-dependency-path: grooming_api_node/package-lock.json
       - run: npm ci
+      # DynamoDB transactions have no in-process fake; the tests that need
+      # them skip without this, so CI always provides it.
+      - name: Install AWS DynamoDB Local
+        run: |
+          mkdir -p "$RUNNER_TEMP/dynamodb-local"
+          curl -fsSL https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.tar.gz \
+            | tar xz -C "$RUNNER_TEMP/dynamodb-local"
+          echo "DYNAMODB_LOCAL_JAR=$RUNNER_TEMP/dynamodb-local/DynamoDBLocal.jar" >> "$GITHUB_ENV"
       - run: npm run check
       - run: npm audit --omit=dev --audit-level=moderate
 

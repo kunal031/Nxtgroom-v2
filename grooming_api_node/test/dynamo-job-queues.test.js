@@ -165,7 +165,23 @@ test("the JavaScript check and the DynamoDB condition agree on every queue filte
 test("an unsupported filter fails loudly instead of matching the wrong jobs", () => {
   assert.throws(() => matchesFilter({}, { $expr: {} }), /Unsupported/);
   assert.throws(() => matchesFilter({}, { status: { $regex: "q" } }), /Unsupported/);
-  assert.throws(() => conditionExpression({ "a.b": 1 }, upsertExpression()), /Unsupported/);
+  assert.throws(() => matchesFilter({}, { status: { $type: "number" } }), /Unsupported/);
+  assert.throws(() => conditionExpression({ status: { $elemMatch: {} } }, upsertExpression()), /Unsupported/);
+});
+
+test("the outbox sort path reaches into the embedded object", () => {
+  // The reconcilers sort by "_private_evaluation_outbox.created_at".
+  const rows = [
+    { _id: "late", _private_evaluation_outbox: { created_at: LATER } },
+    { _id: "early", _private_evaluation_outbox: { created_at: EARLIER } },
+    { _id: "none" },
+  ];
+  assert.deepEqual(
+    sortDocuments(rows, { "_private_evaluation_outbox.created_at": 1 }).map((row) => row._id),
+    ["none", "early", "late"]
+  );
+  assert.equal(matchesFilter(rows[0], { "_private_evaluation_outbox.created_at": { $lte: LATER } }), true);
+  assert.equal(matchesFilter(rows[2], { "_private_evaluation_outbox": { $exists: true } }), false);
 });
 
 test("sorting follows MongoDB: missing values first ascending, last descending", () => {

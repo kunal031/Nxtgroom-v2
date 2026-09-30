@@ -13,6 +13,9 @@
 # Retired backend (kept out after the Node.js migration)
 grooming_api_v2/
 
+# Written into the working directory by AWS DynamoDB Local during tests
+dynamodb-local-metadata.json
+
 # Local editor and OS files
 .DS_Store
 Thumbs.db
