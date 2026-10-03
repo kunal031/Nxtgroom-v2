@@ -199,6 +199,16 @@ export function checkInConcurrencyGate(_req, res, next) {
 }
 
 const OUTBOX_DEADLINE_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long a deletion tombstone may sit before another caller takes it over.
+ *
+ * Long enough that a deletion still running is never interrupted: the work
+ * after the mark is a handful of Mongo deletes plus at most two R2 deletes,
+ * each bounded by r2TimeoutMs (15 s default), so a live deletion finishes far
+ * inside this. Short enough that a person who was told their deletion failed
+ * can retry and have it actually happen.
+ */
+const ABANDONED_DELETION_MS = 5 * 60 * 1000;
 const INSTRUCTOR_ATTENDANCE_GUARD = "_private_attendance_guard_version";
 const INTERNAL_ATTENDANCE_FIELDS = new Set([
   "_private_evaluation_outbox",
@@ -257,13 +267,30 @@ async function purgeAttendance(db, attendance) {
     const current = await db.collection("attendance").findOne({ _id: attendance._id });
     // Already gone: another caller finished the whole deletion.
     if (!current) return;
-    // Still here, but already carrying a tombstone, so a deletion is in flight
-    // elsewhere. Continuing would race that one to the photographs, and the
-    // loser reports PHOTO_DELETE_FAILED for a key the winner has already
-    // removed — a 503 telling somebody their deletion failed when it
-    // succeeded, and a retry that then answers 404. The record is being
-    // removed either way; the only thing left to do is not interfere.
-    return;
+    // Still here, carrying a tombstone somebody else wrote. Two different
+    // situations look identical from here, and only the tombstone's age tells
+    // them apart.
+    //
+    // Fresh: a deletion is genuinely in flight elsewhere. Continuing would
+    // race it to the photographs, and the loser reports a delete failure for a
+    // key the winner has already removed — telling somebody their deletion
+    // failed when it succeeded, and a retry that then answers 404. The record
+    // is being removed either way, so do not interfere.
+    //
+    // Stale: an earlier attempt marked the record and then died before
+    // finishing — typically a transient R2 failure on the photo delete. Backing
+    // off here was unconditional, which made that record permanently
+    // undeletable: every retry saw the tombstone, reported success and did
+    // nothing, while the record stayed in the database and its own dangling
+    // photo reference kept the orphan scanner from reclaiming the images.
+    // Past the window, take the deletion over and finish it.
+    const tombstonedAt = new Date(current.deleting_at || 0).getTime();
+    const abandoned = Number.isFinite(tombstonedAt)
+      && Date.now() - tombstonedAt >= ABANDONED_DELETION_MS;
+    if (!abandoned) return;
+    // Resume from this record's own state: the keys to remove are whatever it
+    // still points at, which is what the caller's stale copy may disagree about.
+    attendance = current;
   }
   // Cancel both halves before touching storage. Workers also re-check the
   // tombstone immediately before external work, covering already-claimed jobs.
@@ -273,16 +300,33 @@ async function purgeAttendance(db, attendance) {
     db.collection("mail_jobs").deleteMany({ attendance_id: attendance._id }),
   ]);
   const keys = [attendance.check_in_photo_key, attendance.check_out_photo_key].filter(Boolean);
+  // A photograph R2 would not remove is handed to the storage cleanup worker
+  // rather than left to a retry of this request.
+  //
+  // Throwing here used to abandon the record mid-deletion: the tombstone was
+  // already written, so the images were unreachable through the API, still
+  // billed for, and shielded from the orphan scanner by the record's own
+  // reference to them. The queued job retries the delete with backoff, which
+  // is the same answer compensateUploadedPhoto already gives for the identical
+  // failure on the upload path, so the record can be removed now and the bytes
+  // follow when R2 recovers.
+  const unresolved = [];
   for (const key of keys) {
     const result = await deletePhoto(key);
     if (!result.deleted) {
-      const error = new Error(`Photo ${key} could not be removed`);
-      error.code = "PHOTO_DELETE_FAILED";
-      throw error;
+      unresolved.push(key);
+      await compensateUploadedPhoto(db, key, "attendance_deleted");
     }
   }
   await deleteEvaluationsForAttendance(db, attendance._id);
   await db.collection("attendance").deleteOne({ _id: attendance._id, deleting_at: { $exists: true } });
+  // Reported after the record is gone, so the caller learns the photographs
+  // are still being chased without being told the deletion itself failed.
+  if (unresolved.length) {
+    const error = new Error(`Photo ${unresolved.join(", ")} could not be removed`);
+    error.code = "PHOTO_DELETE_DEFERRED";
+    throw error;
+  }
 }
 
 async function compensateUploadedPhoto(db, key, reason) {
@@ -2522,11 +2566,17 @@ attendanceRouter.post(
         await purgeAttendance(db, attendance);
         deletedIds.push(attendanceId);
       } catch (error) {
+        // Deferred photo removal still deleted the record, so it belongs with
+        // the deletions. Listing it as failed invited a retry that could only
+        // report "not found".
+        if (error.code === "PHOTO_DELETE_DEFERRED") {
+          console.warn(`Attendance ${attendanceId} deleted; photo removal queued (${error.message})`);
+          deletedIds.push(attendanceId);
+          continue;
+        }
         failed.push({
           attendance_id: attendanceId,
-          detail: error.code === "PHOTO_DELETE_FAILED"
-            ? "The photo could not be removed. Retry deletion."
-            : "The record could not be deleted. Retry deletion.",
+          detail: "The record could not be deleted. Retry deletion.",
         });
       }
     }
@@ -2568,8 +2618,12 @@ attendanceRouter.delete(
     try {
       await purgeAttendance(db, attendance);
     } catch (error) {
-      if (error.code === "PHOTO_DELETE_FAILED") {
-        return res.status(503).json({ detail: "The photo could not be removed. Please retry deletion." });
+      // The record itself is gone; only its photographs are still queued for
+      // removal. Answering 503 here asked for a retry that had nothing left to
+      // do and, before the tombstone could be taken over, answered 503 forever.
+      if (error.code === "PHOTO_DELETE_DEFERRED") {
+        console.warn(`Attendance ${attendance._id} deleted; photo removal queued (${error.message})`);
+        return res.json({ message: "Attendance record deleted" });
       }
       throw error;
     }
