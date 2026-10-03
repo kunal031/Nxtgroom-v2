@@ -2406,8 +2406,8 @@ attendanceRouter.post(
     });
 
     const now = new Date();
-    // Clear any older job for this half before starting fresh work. Checkout
-    // is direct; check-in continues through the durable evaluation worker.
+    // Clear any older job for this half before starting fresh work. Both halves
+    // continue through the durable evaluation worker.
     await db.collection("evaluation_jobs").deleteOne({
       _id: kind === "checkout"
         ? `${attendance._id}:evaluation:checkout`
@@ -2437,45 +2437,18 @@ attendanceRouter.post(
       }
     );
 
-    if (kind === "checkout") {
-      try {
-        await evaluateCheckoutNow(db, {
-          attendanceId: attendance._id,
-          instructor: {
-            id: String(attendance.instructor_id),
-            name: attendance.instructor_name || instructor?.name || "Instructor",
-            email: instructor?.email || null,
-            gender: instructor?.gender || null,
-            collegeId: String(attendance.college_id || instructor?.college_id || ""),
-          },
-          photoKey,
-          mimeType: "image/jpeg",
-          checkOutTime: attendance.check_out_time,
-          checkInTime: attendance.check_in_time,
-        });
-        return res.json({
-          message: "Re-analysis completed.",
-          attendance_id: String(attendance._id),
-        });
-      } catch (error) {
-        const code = String(error?.code || error?.name || "EVALUATION_ERROR").toUpperCase();
-        await db.collection("attendance").updateOne(
-          { _id: attendance._id },
-          {
-            $set: {
-              checkout_evaluation_queue_status: "failed",
-              checkout_analysis_error_code: code,
-              updated_at: new Date(),
-            },
-          }
-        );
-        throw error;
-      }
-    }
-
+    // Both halves go through the durable worker.
+    //
+    // A check-out used to be analysed inside this request. The report was
+    // already deleted above, so a Gemini timeout or a 429 destroyed it with
+    // nothing left to produce another: the record kept
+    // checkout_evaluation_queue_status "failed" and no report at all, and the
+    // only way back was to ask for a re-analysis that could fail the same way.
+    // A queued job survives that — it is retried on the worker's own budget,
+    // and the deadline below bounds how long it may keep trying.
     await enqueueEvaluation(db, {
       attendanceId: attendance._id,
-      kind: "checkin",
+      kind,
       instructor: {
         id: String(attendance.instructor_id),
         name: attendance.instructor_name || instructor?.name || "Instructor",
@@ -2486,6 +2459,9 @@ attendanceRouter.post(
       photoKey,
       mimeType: "image/jpeg",
       checkInTime: attendance.check_in_time,
+      // Only a checkout job carries this, and the worker needs it to say when
+      // the instructor actually left.
+      ...(kind === "checkout" ? { checkOutTime: attendance.check_out_time } : {}),
       deadlineAt: new Date(now.getTime() + OUTBOX_DEADLINE_MS),
     });
 
