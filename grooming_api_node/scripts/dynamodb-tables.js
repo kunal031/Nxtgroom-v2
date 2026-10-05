@@ -2,6 +2,15 @@ import "dotenv/config";
 import { createDynamoClient, dynamoConfig } from "../src/config/dynamo.js";
 import { ensureDynamoTables } from "../src/stores/dynamoTables.js";
 
+/**
+ * Checks, and with --apply creates, the DynamoDB tables in DYNAMO_TABLES.
+ *
+ *   npm run dynamo:tables          report only, changes nothing
+ *   npm run dynamo:tables:apply    create the missing tables
+ *
+ * Uses DYNAMODB_REGION and the DYNAMODB_* keys, or DYNAMODB_ENDPOINT for
+ * DynamoDB Local. Existing tables are never changed or deleted.
+ */
 const apply = process.argv.includes("--apply");
 const config = dynamoConfig();
 
@@ -22,6 +31,7 @@ if (!config.region && !config.endpoint) {
     for (const name of report.missing) console.log(`missing  ${name}`);
     for (const problem of report.conflicts) console.log(`CONFLICT ${problem}`);
     for (const name of report.backups) console.log(`backups  ${name} (point-in-time recovery on)`);
+    for (const name of report.expiry) console.log(`expiry   ${name} (finished jobs removed after a week)`);
     for (const name of report.backupsPending) {
       console.log(`WAITING  ${name}: AWS is still preparing backups; run this command again in a few minutes`);
     }

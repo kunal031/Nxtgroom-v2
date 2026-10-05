@@ -1,6 +1,13 @@
 import { BatchWriteCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { dynamoTableDefinition } from "./dynamoTables.js";
 
+/**
+ * One-off copy of a MongoDB collection into its DynamoDB table, and the
+ * comparison that proves the two agree while writes go to both.
+ *
+ * MongoDB is only ever read here. The copy overwrites DynamoDB items with the
+ * MongoDB version, which is the source of truth until reads move.
+ */
 const BATCH_SIZE = 25;
 const MAX_BATCH_ATTEMPTS = 8;
 const REPORT_LIMIT = 50;
@@ -44,6 +51,7 @@ async function scanAll(client, tableName) {
   return items;
 }
 
+/** Stable JSON: object keys sorted, so field order never counts as a difference. */
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -53,14 +61,19 @@ function canonical(value) {
 }
 
 export async function compareCollectionWithDynamo(db, client, { store, tableName }) {
-  const { itemFromDocument, keyOf } = dynamoTableDefinition(store);
+  const { itemFromDocument, keyOf, ignoreOnCompare = [] } = dynamoTableDefinition(store);
+  const comparable = (item) => {
+    const copy = { ...item };
+    for (const field of ignoreOnCompare) delete copy[field];
+    return canonical(copy);
+  };
   const mongo = new Map();
   for await (const document of db.collection(store).find({})) {
     const item = itemFromDocument(document);
-    mongo.set(keyOf(item), canonical(item));
+    mongo.set(keyOf(item), comparable(item));
   }
   const dynamo = new Map();
-  for (const item of await scanAll(client, tableName)) dynamo.set(keyOf(item), canonical(item));
+  for (const item of await scanAll(client, tableName)) dynamo.set(keyOf(item), comparable(item));
 
   const onlyInMongo = [...mongo.keys()].filter((id) => !dynamo.has(id));
   const onlyInDynamo = [...dynamo.keys()].filter((id) => !mongo.has(id));

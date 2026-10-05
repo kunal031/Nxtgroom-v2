@@ -5,6 +5,16 @@ import { createDynamoClient, dynamoConfig, DYNAMO_STORES } from "../src/config/d
 import { runtimeConfig } from "../src/config/env.js";
 import { compareCollectionWithDynamo, copyCollectionToDynamo } from "../src/stores/dynamoSync.js";
 
+/**
+ * Copy MongoDB collections into DynamoDB, or compare the two.
+ *
+ *   npm run dynamo:compare                         every migrated store
+ *   npm run dynamo:compare -- --store app_settings one store
+ *   npm run dynamo:copy                            count only, writes nothing
+ *   npm run dynamo:copy -- --apply                 copy (MongoDB is only read)
+ *
+ * compare exits 1 when the databases differ, so it can run on a schedule.
+ */
 const [mode] = process.argv.slice(2);
 const apply = process.argv.includes("--apply");
 const storeIndex = process.argv.indexOf("--store");
