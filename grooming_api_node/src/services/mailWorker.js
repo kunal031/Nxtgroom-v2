@@ -22,6 +22,7 @@ import { createWorkerMonitor } from "./workerHealth.js";
 import { createIdleBackoff, createWakeSignal } from "./workerPacing.js";
 import { openSecret } from "./secretBox.js";
 import { completeDeliveryRunIfDone, getDeliveryRun, recordDeliveryOutcome } from "../stores/deliveryRunStore.js";
+import { jobCollection } from "../stores/jobStore.js";
 
 const WORKER_ID = randomUUID();
 const mailQueued = createWakeSignal();
@@ -72,7 +73,7 @@ export async function enqueueMailJob(db, { id, type, toEmail, payload, attendanc
   if (!SUPPORTED_TYPES.has(type)) throw new Error(`Unsupported mail job type: ${type}`);
   if (!id || !toEmail) return false;
   const now = new Date();
-  await db.collection("mail_jobs").updateOne(
+  await jobCollection(db, "mail_jobs").updateOne(
     { _id: id },
     {
       $setOnInsert: {
@@ -97,7 +98,7 @@ export async function enqueueMailJob(db, { id, type, toEmail, payload, attendanc
 async function claimMail(db) {
   const now = new Date();
   const leaseMs = runtimeConfig().notificationLeaseMs;
-  const result = await db.collection("mail_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "mail_jobs").findOneAndUpdate(
     {
       attempts: { $lt: runtimeConfig().notificationMaxAttempts },
       $or: [
@@ -213,14 +214,14 @@ async function processMail(db, job) {
         { projection: { _id: 1 } }
       );
       if (!attendance) {
-        await db.collection("mail_jobs").deleteOne({ _id: job._id, worker_id: WORKER_ID });
+        await jobCollection(db, "mail_jobs").deleteOne({ _id: job._id, worker_id: WORKER_ID });
         return;
       }
     }
     const result = await deliver(db, job);
     if (!result.sent) throw Object.assign(new Error(result.reason || "Email was not accepted"), { code: result.reason });
     const now = new Date();
-    await db.collection("mail_jobs").updateOne(
+    await jobCollection(db, "mail_jobs").updateOne(
       { _id: job._id, status: "processing", worker_id: WORKER_ID },
       {
         $set: {
@@ -260,7 +261,7 @@ async function processMail(db, job) {
   } catch (error) {
     const terminal = job.attempts >= runtimeConfig().notificationMaxAttempts;
     const now = new Date();
-    await db.collection("mail_jobs").updateOne(
+    await jobCollection(db, "mail_jobs").updateOne(
       { _id: job._id, status: "processing", worker_id: WORKER_ID },
       {
         $set: {
