@@ -1,7 +1,19 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 
-export const DYNAMO_STORES = Object.freeze(["app_settings", "report_delivery_runs", "evaluations"]);
+/** Collections that have a DynamoDB implementation. Grows as stores move. */
+export const DYNAMO_STORES = Object.freeze([
+  "app_settings",
+  "report_delivery_runs",
+  "evaluations",
+  "evaluation_jobs",
+  "notification_jobs",
+  "mail_jobs",
+  "storage_cleanup_jobs",
+  // The collections that share MongoDB transactions switch together, under
+  // one name: DB_WRITE_TO_CORE / DB_READ_FROM_CORE (see coreStore.js).
+  "core",
+]);
 
 const WRITE_TARGETS = ["mongo", "both", "dynamo"];
 const READ_SOURCES = ["mongo", "dynamo"];
