@@ -10,6 +10,7 @@ import {
   indexFace,
 } from "./faceRecognition.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 function activeFilter(extra = {}) {
   return {
@@ -94,7 +95,7 @@ export async function enrollReferencePhoto(db, instructor, normalized, {
   const faceIds = [...keptFaceIds, indexed.faceId];
 
   const now = new Date();
-  const update = await db.collection("instructors").updateOne(
+  const update = await coreCollection(db, "instructors").updateOne(
     activeFilter({ _id: instructor._id }),
     {
       $set: {

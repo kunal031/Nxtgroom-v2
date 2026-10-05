@@ -4,6 +4,7 @@ import { runtimeConfig } from "../config/env.js";
 import { createWorkerMonitor } from "./workerHealth.js";
 import { createIdleBackoff } from "./workerPacing.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const WORKER_ID = randomUUID();
 const LEASE_MS = 60_000;

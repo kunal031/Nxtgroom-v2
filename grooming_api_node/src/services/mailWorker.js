@@ -23,6 +23,7 @@ import { createIdleBackoff, createWakeSignal } from "./workerPacing.js";
 import { openSecret } from "./secretBox.js";
 import { completeDeliveryRunIfDone, getDeliveryRun, recordDeliveryOutcome } from "../stores/deliveryRunStore.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const WORKER_ID = randomUUID();
 const mailQueued = createWakeSignal();
@@ -201,7 +202,7 @@ async function processMail(db, job) {
     }
     if (job.attendance_id) {
       const checkoutAlert = job.type === "grooming_alert" && job.payload?.kind === "checkout";
-      const attendance = await db.collection("attendance").findOne(
+      const attendance = await coreCollection(db, "attendance").findOne(
         {
           _id: job.attendance_id,
           deleting_at: { $exists: false },
@@ -234,13 +235,13 @@ async function processMail(db, job) {
       }
     );
     if (job.type === "attendance_reminder" && job.attendance_id) {
-      await db.collection("attendance").updateOne(
+      await coreCollection(db, "attendance").updateOne(
         { _id: job.attendance_id, deleting_at: { $exists: false } },
         { $set: { checkout_reminder_sent_at: now } }
       );
     }
     if (job.type === "grooming_alert" && job.attendance_id) {
-      await db.collection("attendance").updateOne(
+      await coreCollection(db, "attendance").updateOne(
         { _id: job.attendance_id, deleting_at: { $exists: false } },
         {
           $push: {

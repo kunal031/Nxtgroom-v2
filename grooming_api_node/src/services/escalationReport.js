@@ -7,6 +7,7 @@ import {
   failedDayStreaks,
   weekStartKey,
 } from "./evaluationWorker.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -76,7 +77,7 @@ export async function escalationReport(db, { week, from, to, collegeId = null, n
   }
   const days = weekStarts.flatMap((start) => Array.from({ length: 7 }, (_, offset) => addDaysToKey(start, offset)));
 
-  const records = await db.collection("attendance").find(
+  const records = await coreCollection(db, "attendance").find(
     {
       attendance_day: { $in: days },
       instructor_id: { $type: "string" },
@@ -125,7 +126,7 @@ export async function escalationReport(db, { week, from, to, collegeId = null, n
   }
 
   const instructorIds = [...new Set(runs.map((run) => run.instructorId))];
-  const instructors = await db.collection("instructors").find(
+  const instructors = await coreCollection(db, "instructors").find(
     { _id: { $in: instructorIds.flatMap((id) => idMatch(id).$in) } },
     { projection: { name: 1, role: 1, instructor_role: 1, college_id: 1, report_token: 1 } }
   ).toArray();
@@ -135,7 +136,7 @@ export async function escalationReport(db, { week, from, to, collegeId = null, n
     record.college_id || instructorById.get(instructorId)?.college_id
   ))).filter(Boolean).map(String))];
   const colleges = collegeIds.length
-    ? await db.collection("colleges").find(
+    ? await coreCollection(db, "colleges").find(
       { _id: { $in: collegeIds.flatMap((id) => idMatch(id).$in) } },
       { projection: { name: 1 } }
     ).toArray()

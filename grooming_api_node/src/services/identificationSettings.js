@@ -1,4 +1,5 @@
 import { getSetting, saveSetting } from "../stores/settingsStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const SETTINGS_ID = "identification_settings";
 
@@ -135,7 +136,7 @@ export function describeCollegeIdentification(settings, colleges, enrolment) {
 }
 
 export async function loadCollegeEnrolment(db) {
-  const rows = await db.collection("instructors").aggregate([
+  const rows = await coreCollection(db, "instructors").aggregate([
     {
       $match: {
         $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }],

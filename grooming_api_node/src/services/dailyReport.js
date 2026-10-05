@@ -13,6 +13,7 @@ import {
 } from "../stores/settingsStore.js";
 import { evaluationsForSessions } from "../stores/evaluationStore.js";
 import { getDeliveryRun, saveDeliveryRun } from "../stores/deliveryRunStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 export const DAILY_REPORT_SETTINGS_ID = "daily_report";
 export const MAX_DAILY_REPORT_TIMES = 8;
@@ -381,7 +382,7 @@ export async function buildDailyReport(db, run, { ensureTokens = false } = {}) {
   if (!from || !to) throw new Error("Daily report run has no period");
   const dayStart = dateBoundsInTimeZone(run.date, timeZone).start;
 
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find(
       {
         date: { $gte: new Date(dayStart.getTime() - 24 * 60 * 60 * 1000), $lt: to },
@@ -413,7 +414,7 @@ export async function buildDailyReport(db, run, { ensureTokens = false } = {}) {
 
   const instructorIds = [...new Set(records.map((record) => String(record.instructor_id)))];
   const instructors = instructorIds.length
-    ? await db.collection("instructors")
+    ? await coreCollection(db, "instructors")
       .find(
         { _id: { $in: instructorIds.flatMap((id) => idMatch(id).$in) } },
         { projection: { name: 1, report_token: 1, college_id: 1 } }
@@ -424,7 +425,7 @@ export async function buildDailyReport(db, run, { ensureTokens = false } = {}) {
   const collegeOf = (record) => record.college_id || instructorById.get(String(record.instructor_id))?.college_id || null;
   const collegeIds = [...new Set(records.map(collegeOf).filter(Boolean).map(String))];
   const colleges = collegeIds.length
-    ? await db.collection("colleges")
+    ? await coreCollection(db, "colleges")
       .find({ _id: { $in: collegeIds.flatMap((id) => idMatch(id).$in) } }, { projection: { name: 1 } })
       .toArray()
     : [];
@@ -485,7 +486,7 @@ export async function buildDailyReport(db, run, { ensureTokens = false } = {}) {
 export async function buildFullDayReport(db, dateKey, { ensureTokens = false, collegeId = null } = {}) {
   const timeZone = runtimeConfig().appTimeZone;
   const { start, end } = dateBoundsInTimeZone(dateKey, timeZone);
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find(
       {
         date: { $gte: start, $lt: end },
@@ -516,7 +517,7 @@ export async function buildFullDayReport(db, dateKey, { ensureTokens = false, co
 
   const instructorIds = [...new Set(records.map((record) => String(record.instructor_id)))];
   const instructors = instructorIds.length
-    ? await db.collection("instructors")
+    ? await coreCollection(db, "instructors")
       .find(
         { _id: { $in: instructorIds.flatMap((id) => idMatch(id).$in) } },
         { projection: { name: 1, report_token: 1, college_id: 1 } }
@@ -527,7 +528,7 @@ export async function buildFullDayReport(db, dateKey, { ensureTokens = false, co
   const collegeOf = (record) => record.college_id || instructorById.get(String(record.instructor_id))?.college_id || null;
   const collegeIds = [...new Set(records.map(collegeOf).filter(Boolean).map(String))];
   const colleges = collegeIds.length
-    ? await db.collection("colleges")
+    ? await coreCollection(db, "colleges")
       .find({ _id: { $in: collegeIds.flatMap((id) => idMatch(id).$in) } }, { projection: { name: 1 } })
       .toArray()
     : [];
@@ -597,7 +598,7 @@ export async function buildFullDayReport(db, dateKey, { ensureTokens = false, co
 export async function dailyReportPhotoKey(db, dateKey, attendanceId, kind, { collegeId = null } = {}) {
   if (typeof attendanceId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(attendanceId)) return null;
   const { start, end } = dateBoundsInTimeZone(dateKey, runtimeConfig().appTimeZone);
-  const record = await db.collection("attendance").findOne(
+  const record = await coreCollection(db, "attendance").findOne(
     {
       _id: idMatch(attendanceId),
       check_in_time: { $gte: start, $lt: end },
@@ -686,7 +687,7 @@ export async function dailyReportDays(db, month, now = new Date()) {
   const start = dateBoundsInTimeZone(firstKey, timeZone).start;
   const end = dateBoundsInTimeZone(lastKey, timeZone).end;
 
-  const counts = await db.collection("attendance").aggregate(dayCountsPipeline(start, end, timeZone)).toArray();
+  const counts = await coreCollection(db, "attendance").aggregate(dayCountsPipeline(start, end, timeZone)).toArray();
   const byDay = new Map(counts.map((row) => [row._id, row]));
 
   const days = [];

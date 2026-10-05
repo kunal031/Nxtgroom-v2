@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { BigQuery } from "@google-cloud/bigquery";
 import { getSetting, saveSetting } from "../stores/settingsStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const DATASET = "niat_instructor_automation_data";
 const TABLE = "niat_instructor_managers_and_instructors_details";
@@ -160,7 +161,7 @@ export async function saveInstructorRoster(db, records) {
   let modified = 0;
   const BATCH = 500;
   for (let index = 0; index < operations.length; index += BATCH) {
-    const result = await db.collection("instructors").bulkWrite(
+    const result = await coreCollection(db, "instructors").bulkWrite(
       operations.slice(index, index + BATCH),
       { ordered: false }
     );
@@ -267,7 +268,7 @@ export async function saveInstitutes(db, records) {
   let upserted = 0;
   let modified = 0;
   for (let index = 0; index < operations.length; index += 500) {
-    const result = await db.collection("colleges").bulkWrite(
+    const result = await coreCollection(db, "colleges").bulkWrite(
       operations.slice(index, index + 500),
       { ordered: false }
     );
@@ -278,7 +279,7 @@ export async function saveInstitutes(db, records) {
 }
 
 export async function linkInstructorsToInstitutes(db) {
-  const colleges = await db.collection("colleges")
+  const colleges = await coreCollection(db, "colleges")
     .find(
       { $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }] },
       { projection: { _id: 1, name: 1 } }
@@ -296,7 +297,7 @@ export async function linkInstructorsToInstitutes(db) {
     byName.set(key, college._id);
   }
 
-  const unassigned = await db.collection("instructors")
+  const unassigned = await coreCollection(db, "instructors")
     .find({
       source: "bigquery",
       institute_name: { $type: "string" },
@@ -337,7 +338,7 @@ export async function linkInstructorsToInstitutes(db) {
 
   let linked = 0;
   for (let index = 0; index < operations.length; index += 500) {
-    const result = await db.collection("instructors").bulkWrite(
+    const result = await coreCollection(db, "instructors").bulkWrite(
       operations.slice(index, index + 500),
       { ordered: false }
     );

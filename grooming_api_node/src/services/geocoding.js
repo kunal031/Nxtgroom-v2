@@ -1,3 +1,5 @@
+import { coreCollection } from "../stores/coreStore.js";
+
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse";
 const USER_AGENT = "FacultyTrack/1.0 (instructor attendance; niat_instructors_mentors@nxtwave.in)";
 const REQUEST_TIMEOUT_MS = 8000;
@@ -75,7 +77,7 @@ export async function attachAddressToAttendance(db, attendanceId, coordinates, k
   if (!result) return null;
   const prefix = kind === "checkout" ? "check_out_" : "";
   try {
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendanceId },
       {
         $set: {

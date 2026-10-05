@@ -12,6 +12,7 @@ import {
   toDirectFileUrl,
   toSheetCsvUrl,
 } from "./remoteFetch.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 export const IMPORT_ROLES = ["INSTRUCTOR", "CENTRAL_INSTRUCTOR", "CENTRAL_TEAM", "MENTOR", "OTHER"];
 
@@ -258,7 +259,7 @@ export async function findMatchingInstructors(db, keys) {
   if (employeeIds.length) clauses.push({ employee_id: { $in: employeeIds } });
   if (!clauses.length) return found;
 
-  const rows = await db.collection("instructors")
+  const rows = await coreCollection(db, "instructors")
     .find({ $or: clauses }, {
       projection: {
         name: 1, email: 1, employee_id: 1, deleted_at: 1, face_ids: 1,
@@ -372,7 +373,7 @@ function resolveDeps(deps = {}) {
 }
 
 async function loadColleges(db) {
-  return db.collection("colleges")
+  return coreCollection(db, "colleges")
     .find(activeFilter(), { projection: { name: 1, location: 1 } })
     .toArray();
 }
