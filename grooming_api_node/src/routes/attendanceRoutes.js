@@ -71,6 +71,7 @@ import {
   dateRangeBoundsInTimeZone,
 } from "../utils.js";
 import { checkoutSchema, parseCoordinates, validate } from "../validation.js";
+import { jobCollection } from "../stores/jobStore.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -210,9 +211,9 @@ async function purgeAttendance(db, attendance) {
     return;
   }
   await Promise.all([
-    db.collection("evaluation_jobs").deleteMany({ attendance_id: attendance._id }),
-    db.collection("notification_jobs").deleteMany({ attendance_id: attendance._id }),
-    db.collection("mail_jobs").deleteMany({ attendance_id: attendance._id }),
+    jobCollection(db, "evaluation_jobs").deleteMany({ attendance_id: attendance._id }),
+    jobCollection(db, "notification_jobs").deleteMany({ attendance_id: attendance._id }),
+    jobCollection(db, "mail_jobs").deleteMany({ attendance_id: attendance._id }),
   ]);
   const keys = [attendance.check_in_photo_key, attendance.check_out_photo_key].filter(Boolean);
   for (const key of keys) {
@@ -231,7 +232,7 @@ async function compensateUploadedPhoto(db, key, reason) {
   if (!key) return;
   const result = await deletePhoto(key);
   if (result.deleted) return;
-  await db.collection("storage_cleanup_jobs").updateOne(
+  await jobCollection(db, "storage_cleanup_jobs").updateOne(
     { _id: key },
     {
       $setOnInsert: {
@@ -1936,7 +1937,7 @@ attendanceRouter.post(
     });
 
     const now = new Date();
-    await db.collection("evaluation_jobs").deleteOne({
+    await jobCollection(db, "evaluation_jobs").deleteOne({
       _id: kind === "checkout"
         ? `${attendance._id}:evaluation:checkout`
         : `${attendance._id}:evaluation`,
@@ -2154,18 +2155,18 @@ attendanceRouter.delete(
       }
     );
     await Promise.all([
-      db.collection("evaluation_jobs").deleteMany({
+      jobCollection(db, "evaluation_jobs").deleteMany({
         attendance_id: attendance._id,
         $or: [
           { kind: "checkout" },
           { _id: `${attendance._id}:evaluation:checkout` },
         ],
       }),
-      db.collection("notification_jobs").deleteMany({
+      jobCollection(db, "notification_jobs").deleteMany({
         attendance_id: attendance._id,
         type: "checkout",
       }),
-      db.collection("mail_jobs").deleteMany({
+      jobCollection(db, "mail_jobs").deleteMany({
         attendance_id: attendance._id,
         type: "attendance_reminder",
       }),
@@ -2176,7 +2177,7 @@ attendanceRouter.delete(
         return res.status(503).json({ detail: "The check-out photo could not be removed. Please retry deletion." });
       }
     }
-    await db.collection("evaluation_jobs").deleteOne({
+    await jobCollection(db, "evaluation_jobs").deleteOne({
       _id: `${attendance._id}:evaluation:checkout`,
     });
     await deleteEvaluation(db, String(attendance._id), "checkout");

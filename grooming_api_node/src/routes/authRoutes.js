@@ -36,6 +36,7 @@ import { enqueueMailJob } from "../services/mailWorker.js";
 import { sealSecret } from "../services/secretBox.js";
 import { withMongoTransaction } from "../config/db.js";
 import rateLimit from "express-rate-limit";
+import { jobCollection } from "../stores/jobStore.js";
 
 const googleLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -200,7 +201,7 @@ authRouter.post(
     if (user && !user.disabled_at && Object.values(ROLES).includes(user.role)) {
       const token = await issueResetToken(db, { email, kind: "reset", ttlMs: RESET_TTL_MS });
       const name = await displayNameForUser(db, user);
-      await db.collection("mail_jobs").deleteMany({
+      await jobCollection(db, "mail_jobs").deleteMany({
         type: "password_reset",
         to_email: email,
         status: { $in: ["queued", "processing"] },
