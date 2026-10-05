@@ -3,6 +3,7 @@ import { deletePhoto } from "./photoStorage.js";
 import { runtimeConfig } from "../config/env.js";
 import { createWorkerMonitor } from "./workerHealth.js";
 import { createIdleBackoff } from "./workerPacing.js";
+import { jobCollection } from "../stores/jobStore.js";
 
 const WORKER_ID = randomUUID();
 const LEASE_MS = 60_000;
@@ -10,7 +11,7 @@ const MAX_ATTEMPTS = 10;
 
 async function claimCleanup(db) {
   const now = new Date();
-  const result = await db.collection("storage_cleanup_jobs").findOneAndUpdate(
+  const result = await jobCollection(db, "storage_cleanup_jobs").findOneAndUpdate(
     {
       attempts: { $lt: MAX_ATTEMPTS },
       $or: [
@@ -35,7 +36,7 @@ async function claimCleanup(db) {
 async function processCleanup(db, job) {
   const removed = await deletePhoto(job.key);
   if (removed.deleted) {
-    await db.collection("storage_cleanup_jobs").deleteOne({
+    await jobCollection(db, "storage_cleanup_jobs").deleteOne({
       _id: job._id,
       status: "processing",
       worker_id: WORKER_ID,
@@ -43,7 +44,7 @@ async function processCleanup(db, job) {
     return;
   }
   const delay = Math.min(60 * 60_000, 5_000 * (2 ** Math.max(0, job.attempts - 1)));
-  await db.collection("storage_cleanup_jobs").updateOne(
+  await jobCollection(db, "storage_cleanup_jobs").updateOne(
     { _id: job._id, status: "processing", worker_id: WORKER_ID },
     {
       $set: {
