@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { BatchWriteCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { dynamoTableDefinition } from "./dynamoTables.js";
 
@@ -40,15 +41,14 @@ export async function copyCollectionToDynamo(db, client, { store, tableName, app
   return { store, tableName, documents: copied, written: apply ? copied : 0 };
 }
 
-async function scanAll(client, tableName) {
-  const items = [];
+/** Every item in the table, a page at a time, so no page is held after use. */
+async function* scanPages(client, tableName) {
   let ExclusiveStartKey;
   do {
     const page = await client.send(new ScanCommand({ TableName: tableName, ExclusiveStartKey, ConsistentRead: true }));
-    items.push(...(page.Items || []));
+    yield* page.Items || [];
     ExclusiveStartKey = page.LastEvaluatedKey;
   } while (ExclusiveStartKey);
-  return items;
 }
 
 /** Stable JSON: object keys sorted, so field order never counts as a difference. */
@@ -62,30 +62,52 @@ function canonical(value) {
 
 export async function compareCollectionWithDynamo(db, client, { store, tableName }) {
   const { itemFromDocument, keyOf, ignoreOnCompare = [] } = dynamoTableDefinition(store);
-  const comparable = (item) => {
+  // A digest rather than the row: evaluations grows without bound, and
+  // holding every document of both databases at once is what would stop
+  // this command working on exactly the table that most needs checking.
+  const fingerprint = (item) => {
     const copy = { ...item };
     for (const field of ignoreOnCompare) delete copy[field];
-    return canonical(copy);
+    return createHash("sha1").update(canonical(copy)).digest("base64");
   };
+
   const mongo = new Map();
   for await (const document of db.collection(store).find({})) {
     const item = itemFromDocument(document);
-    mongo.set(keyOf(item), comparable(item));
+    mongo.set(keyOf(item), fingerprint(item));
   }
-  const dynamo = new Map();
-  for (const item of await scanAll(client, tableName)) dynamo.set(keyOf(item), comparable(item));
 
-  const onlyInMongo = [...mongo.keys()].filter((id) => !dynamo.has(id));
-  const onlyInDynamo = [...dynamo.keys()].filter((id) => !mongo.has(id));
-  const different = [...mongo.keys()].filter((id) => dynamo.has(id) && dynamo.get(id) !== mongo.get(id));
+  // Walking DynamoDB second lets each item be matched and dropped as it
+  // arrives, so only the unmatched keys are still held at the end.
+  const onlyInDynamo = [];
+  const different = [];
+  let dynamoCount = 0;
+  let onlyInDynamoCount = 0;
+  for await (const item of scanPages(client, tableName)) {
+    dynamoCount += 1;
+    const key = keyOf(item);
+    if (!mongo.has(key)) {
+      onlyInDynamoCount += 1;
+      if (onlyInDynamo.length < REPORT_LIMIT) onlyInDynamo.push(key);
+      continue;
+    }
+    if (mongo.get(key) !== fingerprint(item)) {
+      if (different.length < REPORT_LIMIT) different.push(key);
+    }
+    // Matched either way: what stays in the map is what DynamoDB lacks.
+    mongo.delete(key);
+  }
+
+  const mongoCount = mongo.size + dynamoCount - onlyInDynamoCount;
+  const onlyInMongo = [...mongo.keys()];
   return {
     store,
     tableName,
-    mongoCount: mongo.size,
-    dynamoCount: dynamo.size,
+    mongoCount,
+    dynamoCount,
     matches: !onlyInMongo.length && !onlyInDynamo.length && !different.length,
     onlyInMongo: onlyInMongo.slice(0, REPORT_LIMIT),
-    onlyInDynamo: onlyInDynamo.slice(0, REPORT_LIMIT),
-    different: different.slice(0, REPORT_LIMIT),
+    onlyInDynamo,
+    different,
   };
 }
