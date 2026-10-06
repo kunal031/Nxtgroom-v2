@@ -10,7 +10,7 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { dynamoTableName, getDynamoDocumentClient } from "../config/dynamo.js";
 import { getPath, matchesFilter, sortDocuments } from "./dynamoFilter.js";
-import { fromItem, isConditionFailure, toItem } from "./dynamoItems.js";
+import { fromItem, isConditionFailure, toItem, toStoredItem } from "./dynamoItems.js";
 import { applyUpdate, documentsEqual, project, upsertDocument } from "./dynamoUpdate.js";
 
 /**
@@ -128,7 +128,7 @@ export function documentCollection(definition) {
   const uniques = definition.uniques || [];
 
   function itemFromDocument(document, rev) {
-    const item = toItem(document);
+    const item = toStoredItem(document);
     for (const [name, value] of Object.entries(derive(document))) {
       if (value === undefined || value === null || value === "") delete item[name];
       else item[name] = value;

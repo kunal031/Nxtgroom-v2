@@ -5,7 +5,7 @@ import {
   UpdateTimeToLiveCommand,
   waitUntilTableExists,
 } from "@aws-sdk/client-dynamodb";
-import { toItem } from "./dynamoItems.js";
+import { toStoredItem } from "./dynamoItems.js";
 import { dynamoJobCollection, JOB_INDEXES, JOB_QUEUES } from "./jobStore.js";
 import { CORE_DEFINITIONS, dynamoCoreCollection, UNIQUE_KEYS_STORE } from "./coreStore.js";
 
@@ -24,7 +24,7 @@ import { CORE_DEFINITIONS, dynamoCoreCollection, UNIQUE_KEYS_STORE } from "./cor
 const byId = {
   attributes: [{ AttributeName: "_id", AttributeType: "S" }],
   keySchema: [{ AttributeName: "_id", KeyType: "HASH" }],
-  itemFromDocument: (document) => toItem(document),
+  itemFromDocument: (document) => toStoredItem(document),
   keyOf: (item) => String(item._id),
 };
 
@@ -45,7 +45,7 @@ export const DYNAMO_TABLES = Object.freeze([
     // Evaluations stored before check-out analysis existed have no kind;
     // all of them are check-ins (see evaluationFilter).
     itemFromDocument: (document) => {
-      const item = toItem(document);
+      const item = toStoredItem(document);
       return { ...item, attendance_id: String(item.attendance_id), kind: item.kind === "checkout" ? "checkout" : "checkin" };
     },
     keyOf: (item) => `${item.attendance_id}#${item.kind}`,

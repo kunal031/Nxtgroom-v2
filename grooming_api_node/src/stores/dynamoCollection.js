@@ -7,7 +7,7 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { getDynamoDocumentClient } from "../config/dynamo.js";
 import { conditionExpression, matchesFilter, sortDocuments } from "./dynamoFilter.js";
-import { fromItem, isConditionFailure, toItem, upsertExpression } from "./dynamoItems.js";
+import { fromItem, isConditionFailure, toItem, toStoredItem, upsertExpression } from "./dynamoItems.js";
 
 /**
  * A DynamoDB table that answers the MongoDB collection calls the application
@@ -61,7 +61,7 @@ export function dynamoCollection(definition) {
   // rev 2 on items written whole (copy, mirror), so the next update of one
   // is never mistaken for the write that created it.
   function itemFromDocument(document) {
-    const item = { ...toItem(document), rev: 2 };
+    const item = { ...toStoredItem(document), rev: 2 };
     for (const [name, value] of Object.entries(definition.derive(document))) {
       if (value === undefined) delete item[name];
       else item[name] = value;

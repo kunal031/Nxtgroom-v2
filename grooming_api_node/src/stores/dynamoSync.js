@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { BatchWriteCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
+import { DATE_FIELDS } from "./dynamoItems.js";
 import { dynamoTableDefinition } from "./dynamoTables.js";
 
 /**
@@ -67,6 +68,9 @@ export async function compareCollectionWithDynamo(db, client, { store, tableName
   // this command working on exactly the table that most needs checking.
   const fingerprint = (item) => {
     const copy = { ...item };
+    // Every stored item records which fields were dates; MongoDB has no
+    // such field, so it is never a difference.
+    delete copy[DATE_FIELDS];
     for (const field of ignoreOnCompare) delete copy[field];
     return createHash("sha1").update(canonical(copy)).digest("base64");
   };
