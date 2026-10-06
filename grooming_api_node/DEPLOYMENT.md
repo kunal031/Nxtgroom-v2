@@ -142,12 +142,24 @@ startup may create missing indexes automatically after the same audit passes.
 
 ### Amazon DynamoDB (migration in progress)
 
-Data is moving from MongoDB to DynamoDB one collection at a time; see
-`docs/DYNAMODB_MIGRATION_PLAN.md`. Migrated so far: `app_settings`,
-`report_delivery_runs` and `evaluations`, none of which takes part in a
-MongoDB transaction. The collections that share transactions (colleges,
-BOAs, users, instructors, attendance) move together, last. With the
-switches unset, everything stays on MongoDB and none of this is needed.
+Data moves from MongoDB to DynamoDB one store at a time; see
+`docs/DYNAMODB_ARCHITECTURE.md`. **With the switches unset, everything stays
+on MongoDB and none of this is needed.**
+
+Every collection now has a DynamoDB implementation, in the order they should
+move:
+
+| Order | Switch | Collections |
+|---|---|---|
+| 1 | `DB_WRITE_TO_APP_SETTINGS` | `app_settings` |
+| 2 | `DB_WRITE_TO_REPORT_DELIVERY_RUNS` | `report_delivery_runs` |
+| 3 | `DB_WRITE_TO_EVALUATION_JOBS` and the three other `*_JOBS` switches | the four job queues |
+| 4 | `DB_WRITE_TO_EVALUATIONS` | `evaluations` |
+| 5 | `DB_WRITE_TO_CORE` | `colleges`, `boas`, `users`, `password_resets`, `instructors`, `attendance` |
+
+The core six move as one group because they share transactions and a
+transaction cannot span two databases. Move them last, after everything
+above has held in production.
 
 1. In IAM, create a user `facultytrack-dynamodb` with an access key and only
    this policy (replace the account id). Lightsail cannot use IAM roles, and
@@ -161,10 +173,12 @@ switches unset, everything stays on MongoDB and none of this is needed.
          "Effect": "Allow",
          "Action": [
            "dynamodb:DescribeTable", "dynamodb:CreateTable", "dynamodb:TagResource",
-           "dynamodb:UpdateContinuousBackups", "dynamodb:GetItem", "dynamodb:PutItem",
+           "dynamodb:UpdateContinuousBackups", "dynamodb:UpdateTimeToLive",
+           "dynamodb:DescribeTimeToLive", "dynamodb:GetItem", "dynamodb:PutItem",
            "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query",
            "dynamodb:Scan", "dynamodb:BatchWriteItem", "dynamodb:BatchGetItem",
-           "dynamodb:ConditionCheckItem"
+           "dynamodb:ConditionCheckItem", "dynamodb:TransactWriteItems",
+           "dynamodb:TransactGetItems"
          ],
          "Resource": [
            "arn:aws:dynamodb:ap-south-1:ACCOUNT_ID:table/facultytrack-*",
@@ -190,18 +204,40 @@ switches unset, everything stays on MongoDB and none of this is needed.
    docker compose run --rm api npm run dynamo:copy -- --apply
    ```
 
-4. Turn on dual writes: set `DB_WRITE_TO=both` (reads stay on MongoDB) and
-   redeploy. A failed DynamoDB write is logged as `shadow_write_failed` and
-   never fails a request.
+4. Turn on dual writes for **one** store and redeploy, reads staying on
+   MongoDB. Use the per-store switch rather than the global one, so a
+   problem affects one collection:
+
+   ```bash
+   DB_WRITE_TO_APP_SETTINGS=both
+   ```
+
+   A DynamoDB write that fails is retried three times. One that still does
+   not land is logged as `shadow_write_failed` and counted at
+   `/health/metrics` under `divergence.unmirrored_writes`; it never fails
+   the request. **Anything other than zero there means the databases have
+   drifted** — find the rows with `dynamo:compare` and copy that store
+   again.
 
 5. Check daily that the databases agree; it exits 1 on any difference:
 
    ```bash
-   docker compose run --rm api npm run dynamo:compare
+   docker compose run --rm api npm run dynamo:compare -- --store app_settings
    ```
 
-6. After a clean week, move reads: `DB_READ_FROM=dynamo`. To undo either
-   step, set the value back to `mongo` and redeploy.
+6. After a clean week with no divergence, move that store's reads:
+   `DB_READ_FROM_APP_SETTINGS=dynamo`. Then repeat steps 3-6 for the next
+   store in the table above.
+
+7. To undo any step, set the value back to `mongo` and redeploy. MongoDB
+   keeps receiving every write until a store reaches `dynamo/dynamo`, so a
+   rollback before then loses nothing.
+
+The process refuses to start if a switch points at a table that does not
+exist or is missing an index, so a skipped `dynamo:tables:apply` fails
+immediately and visibly instead of serving empty results. `/health/ready`
+answers 503 with `DYNAMODB_UNAVAILABLE` if DynamoDB stops answering once a
+store is using it.
 
 ### Amazon SES
 
