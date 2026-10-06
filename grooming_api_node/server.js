@@ -36,6 +36,7 @@ import { getWorkerReadiness } from "./src/services/workerHealth.js";
 import { createDocument } from "./src/utils.js";
 import { telemetrySnapshot } from "./src/services/telemetry.js";
 import { coreCollection } from "./src/stores/coreStore.js";
+import { verifyDynamoTables } from "./src/stores/dynamoStartup.js";
 
 const config = runtimeConfig();
 
@@ -304,6 +305,7 @@ export async function seedAdmin(db) {
 
 export async function startServer() {
   const currentConfig = validateEnvironment();
+  await verifyDynamoTables();
   const db = await connectToMongo();
   if (!db) throw new Error("MongoDB is required to start the API");
   app.locals.db = db;

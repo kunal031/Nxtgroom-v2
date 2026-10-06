@@ -5,12 +5,14 @@ import { startEvaluationWorker } from "./src/services/evaluationWorker.js";
 import { startNotificationWorker } from "./src/services/notificationWorker.js";
 import { startStorageCleanupWorker } from "./src/services/storageCleanupWorker.js";
 import { startMailWorker } from "./src/services/mailWorker.js";
+import { verifyDynamoTables } from "./src/stores/dynamoStartup.js";
 
 async function startWorkers() {
   const config = validateEnvironment();
   if (config.processRole !== "worker") {
     throw new Error("worker.js requires PROCESS_ROLE=worker");
   }
+  await verifyDynamoTables();
   const db = await connectToMongo();
   if (!db) throw new Error("MongoDB is required to start workers");
   const workers = [
