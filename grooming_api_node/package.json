@@ -20,7 +20,8 @@
     "dynamo:copy": "node scripts/dynamodb-sync.js copy",
     "dynamo:compare": "node scripts/dynamodb-sync.js compare",
     "test": "node --test",
-    "check": "node --check server.js && node --test"
+    "check": "node --check server.js && node --test",
+    "dynamo:inspect": "node scripts/dynamodb-inspect.js"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1142.0",
