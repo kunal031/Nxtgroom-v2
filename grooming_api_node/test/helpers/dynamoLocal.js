@@ -28,8 +28,13 @@ export function dynamoLocalJar() {
 export const TRANSACTIONS_UNAVAILABLE =
   "DynamoDB transactions need AWS DynamoDB Local; set DYNAMODB_LOCAL_JAR (see test/helpers/dynamoLocal.js)";
 
+// The JVM can take a while to listen, and `node --test` starts several test
+// files at once, each with its own DynamoDB Local; 10 s was not enough under
+// that load, so wait up to a minute before giving up.
+const STARTUP_ATTEMPTS = 600;
+
 async function waitForPort(port, child) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < STARTUP_ATTEMPTS; attempt += 1) {
     if (child?.exitCode !== null && child?.exitCode !== undefined) {
       throw new Error(`DynamoDB Local exited with code ${child.exitCode}`);
     }

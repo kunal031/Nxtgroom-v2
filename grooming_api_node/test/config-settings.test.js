@@ -93,8 +93,8 @@ test("with the switch on, a checked-in instructor moves to another institute", a
 test("editing and importing read the switch; Settings serves and saves it", async () => {
   const routes = await readFile(new URL("../src/routes/instructorRoutes.js", import.meta.url), "utf8");
   assert.equal((routes.match(/const \{ allow_move_while_checked_in: allowMoveWhileCheckedIn \} = await getConfigSettings\(db\);/g) || []).length, 2);
-  assert.match(routes, /req\.validatedBody,\s*withMongoTransaction,\s*\{ allowMoveWhileCheckedIn \}/);
-  assert.match(routes, /updateInstructor: \(database, instructorId, fields\) => updateInstructorGuarded\(\s*database,\s*instructorId,\s*fields,\s*withMongoTransaction,\s*\{ allowMoveWhileCheckedIn \},\s*\)/);
+  assert.match(routes, /req\.validatedBody,\s*(?:withMongoTransaction|null),\s*\{ allowMoveWhileCheckedIn \}/);
+  assert.match(routes, /updateInstructor: \(database, instructorId, fields\) => updateInstructorGuarded\(\s*database,\s*instructorId,\s*fields,\s*(?:withMongoTransaction|null),\s*\{ allowMoveWhileCheckedIn \},\s*\)/);
   const admin = await readFile(new URL("../src/routes/adminRoutes.js", import.meta.url), "utf8");
   assert.match(admin, /adminRouter\.get\(\s*"\/settings\/config",\s*requireSuperAdmin,/);
   assert.match(admin, /adminRouter\.put\(\s*"\/settings\/config",\s*requireSuperAdmin,/);

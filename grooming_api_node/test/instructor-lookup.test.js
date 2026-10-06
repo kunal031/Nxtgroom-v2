@@ -46,7 +46,7 @@ test("no instructor lookup outside the roster code compares a raw id", async () 
   for (const file of files) {
     const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
     const lookups = [...source.matchAll(
-      /collection\("instructors"\)[\s\S]{0,80}?findOne\(\{\s*_id:\s*([A-Za-z_$][\w$]*)/g
+      /[Cc]ollection\((?:[A-Za-z_$][\w$]*,\s*)?"instructors"\)[\s\S]{0,80}?findOne\(\{\s*_id:\s*([A-Za-z_$][\w$]*)/g
     )];
     assert.ok(lookups.length > 0, `${file} no longer looks up an instructor; update this test`);
     for (const [, expression] of lookups) {

@@ -49,6 +49,8 @@ before(async () => {
 beforeEach(async () => {
   setDynamoDocumentClient(client);
   setRoute("mongo", "mongo");
+  delete process.env.DB_WRITE_TO_REPORT_DELIVERY_RUNS;
+  delete process.env.DB_READ_FROM_REPORT_DELIVERY_RUNS;
   for (const [table, key] of [[EVALUATIONS, ["attendance_id", "kind"]], [RUNS, ["_id"]]]) {
     const { Items = [] } = await client.send(new ScanCommand({ TableName: table }));
     for (const item of Items) {
@@ -255,7 +257,11 @@ test("a delivery run counts outcomes and completes only when all are in", async 
 });
 
 test("the reminder cron keeps its run on DynamoDB while everything else stays on MongoDB", async () => {
-  setRoute("dynamo", "dynamo");
+  // Only the delivery runs move: mail_jobs and the core collections have
+  // their own switches and must stay on the MongoDB double below.
+  setRoute("mongo", "mongo");
+  process.env.DB_WRITE_TO_REPORT_DELIVERY_RUNS = "dynamo";
+  process.env.DB_READ_FROM_REPORT_DELIVERY_RUNS = "dynamo";
   const mailJobs = [];
   const { recordRunTerminal } = await import("../src/services/mailWorker.js");
   const db = {
