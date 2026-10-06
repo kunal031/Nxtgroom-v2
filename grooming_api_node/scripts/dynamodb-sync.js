@@ -4,6 +4,7 @@ import { MongoClient } from "mongodb";
 import { createDynamoClient, dynamoConfig, DYNAMO_STORES } from "../src/config/dynamo.js";
 import { runtimeConfig } from "../src/config/env.js";
 import { compareCollectionWithDynamo, copyCollectionToDynamo } from "../src/stores/dynamoSync.js";
+import { CORE_ROUTE_STORE, CORE_STORES, UNIQUE_KEYS_STORE } from "../src/stores/coreStore.js";
 
 /**
  * Copy MongoDB collections into DynamoDB, or compare the two.
@@ -18,13 +19,25 @@ import { compareCollectionWithDynamo, copyCollectionToDynamo } from "../src/stor
 const [mode] = process.argv.slice(2);
 const apply = process.argv.includes("--apply");
 const storeIndex = process.argv.indexOf("--store");
-const stores = storeIndex > -1 ? [process.argv[storeIndex + 1]] : DYNAMO_STORES;
+
+/**
+ * The collections behind a switch name. "core" is one switch over six
+ * collections plus the reservations that stand in for their unique indexes,
+ * and the switch name is not itself a table.
+ */
+const collectionsOf = (store) => (
+  store === CORE_ROUTE_STORE ? [...CORE_STORES, UNIQUE_KEYS_STORE] : [store]
+);
+const SYNCABLE = DYNAMO_STORES.flatMap(collectionsOf);
+const stores = storeIndex > -1
+  ? collectionsOf(process.argv[storeIndex + 1])
+  : SYNCABLE;
 
 if (!["copy", "compare"].includes(mode)) {
   console.error("Usage: node scripts/dynamodb-sync.js copy|compare [--store name] [--apply]");
   process.exitCode = 2;
-} else if (stores.some((store) => !DYNAMO_STORES.includes(store))) {
-  console.error(`Unknown store. Migrated stores: ${DYNAMO_STORES.join(", ")}`);
+} else if (stores.some((store) => !SYNCABLE.includes(store))) {
+  console.error(`Unknown store. Migrated stores: ${[...DYNAMO_STORES, ...SYNCABLE].filter((name, at, all) => all.indexOf(name) === at).join(", ")}`);
   process.exitCode = 2;
 } else {
   const config = runtimeConfig();
