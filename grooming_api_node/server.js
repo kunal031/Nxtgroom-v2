@@ -37,6 +37,7 @@ import { createDocument } from "./src/utils.js";
 import { telemetrySnapshot } from "./src/services/telemetry.js";
 import { coreCollection } from "./src/stores/coreStore.js";
 import { checkDynamoConnection, verifyDynamoTables } from "./src/stores/dynamoStartup.js";
+import { closeDynamoConnection } from "./src/config/dynamo.js";
 
 const config = runtimeConfig();
 
@@ -353,6 +354,7 @@ export async function startServer() {
       ...workers.map((worker) => worker.stop()),
     ]);
     await closeMongoConnection();
+    closeDynamoConnection();
     clearTimeout(forceExit);
   };
   const fatalShutdown = (error) => {

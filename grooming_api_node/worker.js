@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { closeMongoConnection, connectToMongo } from "./src/config/db.js";
 import { validateEnvironment } from "./src/config/env.js";
+import { closeDynamoConnection } from "./src/config/dynamo.js";
 import { startEvaluationWorker } from "./src/services/evaluationWorker.js";
 import { startNotificationWorker } from "./src/services/notificationWorker.js";
 import { startStorageCleanupWorker } from "./src/services/storageCleanupWorker.js";
@@ -35,6 +36,7 @@ async function startWorkers() {
     forceExit.unref();
     await Promise.allSettled(workers.map((worker) => worker.stop()));
     await closeMongoConnection();
+    closeDynamoConnection();
     clearTimeout(forceExit);
   };
   const fatalShutdown = (error) => {

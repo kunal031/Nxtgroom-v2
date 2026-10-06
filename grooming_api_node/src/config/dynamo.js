@@ -117,3 +117,17 @@ export function getDynamoDocumentClient() {
 export function setDynamoDocumentClient(client) {
   documentClient = client;
 }
+
+/**
+ * Releases the DynamoDB client on shutdown, the counterpart of
+ * closeMongoConnection. Safe to call when nothing ever opened one.
+ */
+export function closeDynamoConnection() {
+  if (!documentClient) return;
+  try {
+    documentClient.destroy();
+  } catch {
+    // Already torn down, or a test double without destroy: nothing to free.
+  }
+  documentClient = null;
+}
