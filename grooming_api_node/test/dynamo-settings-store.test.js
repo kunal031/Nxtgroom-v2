@@ -308,6 +308,27 @@ test("copy fills DynamoDB from MongoDB and compare finds any difference", async 
   assert.equal(Item.created_at, "2026-09-29T03:30:00.000Z", "dates are stored as sortable ISO strings");
 });
 
+test("a table that does not exist is said so, not reported as empty", async () => {
+  const mongo = memoryMongo();
+  setRoute("mongo", "mongo");
+  await settingsScenario(mongo);
+
+  // "DynamoDB 0" for a table nobody created reads as lost data, and the
+  // difference it reports would send someone hunting for missing rows.
+  await assert.rejects(
+    compareCollectionWithDynamo(mongo, client, {
+      store: "app_settings",
+      tableName: "absent-app_settings",
+    }),
+    (error) => {
+      assert.equal(error.name, "MissingTableError");
+      assert.equal(error.tableName, "absent-app_settings");
+      assert.match(error.message, /dynamo:tables:apply/, "says how to fix it");
+      return true;
+    }
+  );
+});
+
 test("the table check reports existing tables and changes nothing without --apply", async () => {
   const report = await ensureDynamoTables(rawClient, { prefix: PREFIX, apply: false, protect: false });
   assert.ok(report.existing.includes(TABLE));

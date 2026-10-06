@@ -48,6 +48,7 @@ if (!["copy", "compare"].includes(mode)) {
     serverSelectionTimeoutMS: 10000,
   });
   let rawClient;
+  const missingTables = [];
   try {
     rawClient = createDynamoClient(dynamo);
     const client = DynamoDBDocumentClient.from(rawClient, { marshallOptions: { removeUndefinedValues: true } });
@@ -61,7 +62,17 @@ if (!["copy", "compare"].includes(mode)) {
           ? `${store}: copied ${result.written} document(s) into ${tableName}`
           : `${store}: ${result.documents} document(s) would be copied into ${tableName} (add --apply)`);
       } else {
-        const result = await compareCollectionWithDynamo(db, client, { store, tableName });
+        let result;
+        try {
+          result = await compareCollectionWithDynamo(db, client, { store, tableName });
+        } catch (error) {
+          if (error?.name !== "MissingTableError") throw error;
+          // Carry on with the other stores: during a migration most tables
+          // do not exist yet, and one report per store is the useful output.
+          console.log(`${store}: no DynamoDB table yet (${tableName})`);
+          missingTables.push(tableName);
+          continue;
+        }
         console.log(result.matches
           ? `${store}: identical (${result.mongoCount} document(s))`
           : `${store}: DIFFERENT. MongoDB ${result.mongoCount}, DynamoDB ${result.dynamoCount}\n`
@@ -70,6 +81,13 @@ if (!["copy", "compare"].includes(mode)) {
             + `  different:        ${result.different.join(", ") || "-"}`);
         if (!result.matches) process.exitCode = 1;
       }
+    }
+    if (missingTables.length) {
+      console.log(
+        `\n${missingTables.length} table(s) do not exist yet, so there is nothing to compare for them.`
+        + "\nThat is normal while a store is still on MongoDB. To create them:"
+        + "\n  npm run dynamo:tables:apply"
+      );
     }
   } catch (error) {
     console.error(`DynamoDB ${mode} failed (${error?.name || "Error"}): ${error?.message || ""}`);

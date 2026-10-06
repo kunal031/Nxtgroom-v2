@@ -52,6 +52,14 @@ async function* scanPages(client, tableName) {
   } while (ExclusiveStartKey);
 }
 
+export class MissingTableError extends Error {
+  constructor(tableName) {
+    super(`${tableName} does not exist; run npm run dynamo:tables:apply`);
+    this.name = "MissingTableError";
+    this.tableName = tableName;
+  }
+}
+
 /** Stable JSON: object keys sorted, so field order never counts as a difference. */
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -87,7 +95,20 @@ export async function compareCollectionWithDynamo(db, client, { store, tableName
   const different = [];
   let dynamoCount = 0;
   let onlyInDynamoCount = 0;
-  for await (const item of scanPages(client, tableName)) {
+  // An absent table is a deployment step that has not run, not a table whose
+  // rows are missing: saying "DynamoDB 0" for it reads as lost data. The scan
+  // is still consumed a page at a time, so nothing is buffered to find out.
+  const scan = scanPages(client, tableName)[Symbol.asyncIterator]();
+  const nextItem = async () => {
+    try {
+      return await scan.next();
+    } catch (error) {
+      if (error?.name === "ResourceNotFoundException") throw new MissingTableError(tableName);
+      throw error;
+    }
+  };
+  for (let step = await nextItem(); !step.done; step = await nextItem()) {
+    const item = step.value;
     dynamoCount += 1;
     const key = keyOf(item);
     if (!mongo.has(key)) {
