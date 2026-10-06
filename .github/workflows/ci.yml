@@ -44,6 +44,18 @@ jobs:
           cache: npm
           cache-dependency-path: grooming_api_node/package-lock.json
       - run: npm ci
+      # Without this, the DynamoDB transaction tests skip instead of running:
+      # dynalite does not implement TransactWriteItems.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Fetch DynamoDB Local
+        run: |
+          mkdir -p "$RUNNER_TEMP/dynamodb-local"
+          curl -sSL https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.tar.gz \
+            | tar xz -C "$RUNNER_TEMP/dynamodb-local"
+          echo "DYNAMODB_LOCAL_JAR=$RUNNER_TEMP/dynamodb-local/DynamoDBLocal.jar" >> "$GITHUB_ENV"
       - run: npm run check
       - run: npm audit --omit=dev --audit-level=moderate
 
