@@ -7,3 +7,6 @@ node_modules/
 temp_uploads/
 coverage/
 *.log
+
+# DynamoDB Local drops this beside whatever started it.
+dynamodb-local-metadata.json
