@@ -35,6 +35,7 @@ import { checkPhotoStorageConnection } from "./src/services/photoStorage.js";
 import { getWorkerReadiness } from "./src/services/workerHealth.js";
 import { createDocument } from "./src/utils.js";
 import { telemetrySnapshot } from "./src/services/telemetry.js";
+import { shadowFailures } from "./src/stores/routing.js";
 import { coreCollection } from "./src/stores/coreStore.js";
 import { checkDynamoConnection, verifyDynamoTables } from "./src/stores/dynamoStartup.js";
 import { closeDynamoConnection } from "./src/config/dynamo.js";
@@ -113,7 +114,19 @@ app.get("/", (_req, res) => {
 app.get("/health/live", (_req, res) => {
   res.json({ status: "ok" });
 });
-app.get("/health/metrics", requireCronSecret, (_req, res) => res.json(telemetrySnapshot()));
+app.get("/health/metrics", requireCronSecret, (_req, res) => {
+  const unmirrored = shadowFailures();
+  return res.json({
+    ...telemetrySnapshot(),
+    // Writes that landed in one database but not the other: anything here
+    // means the two have drifted and dynamo:compare will name the rows.
+    divergence: {
+      unmirrored_writes: unmirrored.length,
+      oldest: unmirrored[0] || null,
+      newest: unmirrored[unmirrored.length - 1] || null,
+    },
+  });
+});
 
 async function readinessStatus() {
   const databaseReady = Boolean(app.locals.db) && await checkMongoConnection();
