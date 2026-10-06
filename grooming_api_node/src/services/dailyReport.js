@@ -552,7 +552,7 @@ export async function buildFullDayReport(db, dateKey, { ensureTokens = false, co
 
   let institute = null;
   if (collegeId) {
-    institute = collegeName.get(String(collegeId)) || (await db.collection("colleges").findOne(
+    institute = collegeName.get(String(collegeId)) || (await coreCollection(db, "colleges").findOne(
       { _id: idMatch(String(collegeId)) },
       { projection: { name: 1 } }
     ))?.name || "";
@@ -612,7 +612,7 @@ export async function dailyReportPhotoKey(db, dateKey, attendanceId, kind, { col
   if (collegeId) {
     let recordCollege = record.college_id;
     if (!recordCollege) {
-      recordCollege = (await db.collection("instructors").findOne(
+      recordCollege = (await coreCollection(db, "instructors").findOne(
         { _id: idMatch(String(record.instructor_id)) },
         { projection: { college_id: 1 } }
       ))?.college_id;
@@ -724,7 +724,7 @@ export async function dailyReportCampuses(db, dateKey, now = new Date()) {
   const timeZone = runtimeConfig().appTimeZone;
   if (!isValidDateKey(dateKey)) throw new RangeError("date must be YYYY-MM-DD");
   const { start, end } = dateBoundsInTimeZone(dateKey, timeZone);
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find(dayMatch(start, end), {
       projection: { college_id: 1, instructor_id: 1, check_out_time: 1, checkout_deleting_at: 1 },
     })
@@ -733,7 +733,7 @@ export async function dailyReportCampuses(db, dateKey, now = new Date()) {
 
   const missing = [...new Set(records.filter((record) => !record.college_id).map((record) => String(record.instructor_id)))];
   const instructors = missing.length
-    ? await db.collection("instructors")
+    ? await coreCollection(db, "instructors")
       .find({ _id: { $in: missing.flatMap((id) => idMatch(id).$in) } }, { projection: { college_id: 1 } })
       .toArray()
     : [];
@@ -750,7 +750,7 @@ export async function dailyReportCampuses(db, dateKey, now = new Date()) {
   }
   const ids = [...counts.keys()];
   const colleges = ids.length
-    ? await db.collection("colleges")
+    ? await coreCollection(db, "colleges")
       .find({ _id: { $in: ids.flatMap((id) => idMatch(id).$in) } }, { projection: { name: 1 } })
       .toArray()
     : [];

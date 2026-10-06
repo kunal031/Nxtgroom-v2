@@ -1,4 +1,5 @@
 import { getSetting, saveSetting } from "../stores/settingsStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 const SETTINGS_ID = "config_settings";
 const FIELD = "instructor_categories";
@@ -45,7 +46,7 @@ function nameFilter(name) {
 }
 
 async function categoryUsage(db) {
-  const rows = await db.collection("instructors").aggregate([
+  const rows = await coreCollection(db, "instructors").aggregate([
     { $match: { $and: [ACTIVE_INSTRUCTOR, { instructor_category: { $type: "string", $ne: "" } }] } },
     { $group: { _id: "$instructor_category", count: { $sum: 1 } } },
   ]).toArray();
@@ -105,7 +106,7 @@ export async function renameInstructorCategory(db, fromValue, toValue, updatedBy
 
   let moved = 0;
   if (existing !== check.name) {
-    const result = await db.collection("instructors").updateMany(
+    const result = await coreCollection(db, "instructors").updateMany(
       { instructor_category: nameFilter(existing) },
       { $set: { instructor_category: check.name, updated_at: new Date() } }
     );

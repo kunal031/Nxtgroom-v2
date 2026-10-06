@@ -146,7 +146,7 @@ async function deliverCampusDailyReport(db, job) {
   }
   const collegeId = String(job.payload?.college_id || "");
   const college = collegeId
-    ? await db.collection("colleges").findOne({ _id: idMatch(collegeId) }, { projection: { name: 1 } })
+    ? await coreCollection(db, "colleges").findOne({ _id: idMatch(collegeId) }, { projection: { name: 1 } })
     : null;
   if (!college) {
     throw Object.assign(new Error("Institute not found"), { code: "DAILY_REPORT_CAMPUS_MISSING" });
@@ -183,7 +183,7 @@ export async function recordRunTerminal(db, runId, outcome, now) {
 async function checkedInSinceQueued(db, payload) {
   if (!payload?.instructor_id || !payload?.date) return false;
   const { start, end } = dateBoundsInTimeZone(payload.date, runtimeConfig().appTimeZone);
-  const record = await db.collection("attendance").findOne(
+  const record = await coreCollection(db, "attendance").findOne(
     {
       instructor_id: String(payload.instructor_id),
       check_in_time: { $gte: start, $lt: end },
@@ -197,7 +197,7 @@ async function checkedInSinceQueued(db, payload) {
 async function processMail(db, job) {
   try {
     if (job.type === "checkin_reminder" && await checkedInSinceQueued(db, job.payload)) {
-      await db.collection("mail_jobs").deleteOne({ _id: job._id, worker_id: WORKER_ID });
+      await jobCollection(db, "mail_jobs").deleteOne({ _id: job._id, worker_id: WORKER_ID });
       return;
     }
     if (job.attendance_id) {

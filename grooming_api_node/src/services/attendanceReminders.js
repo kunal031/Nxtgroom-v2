@@ -5,6 +5,7 @@ import { localDateKey } from "./instructorReports.js";
 import { enqueueMailJob } from "./mailWorker.js";
 import { getSetting, saveSetting } from "../stores/settingsStore.js";
 import { completeDeliveryRunIfDone, getDeliveryRun, saveDeliveryRun } from "../stores/deliveryRunStore.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 export const ATTENDANCE_REMINDER_SETTINGS_ID = "attendance_reminder_settings";
 export const REMINDER_KINDS = Object.freeze(["checkin", "checkout"]);
@@ -147,7 +148,7 @@ export async function deliverAttendanceReminders(db, now = new Date()) {
   const to = new Date(`${today}T23:59:59.999Z`);
   to.setUTCDate(to.getUTCDate() + 1);
 
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find({ check_in_time: { $gte: from, $lte: to }, check_out_time: null })
     .toArray();
   const todays = records.filter((record) => (
@@ -161,7 +162,7 @@ export async function deliverAttendanceReminders(db, now = new Date()) {
   for (const record of todays) {
     try {
       if (record.checkout_reminder_sent_at) continue;
-      const instructor = await db.collection("instructors").findOne({ _id: idMatch(String(record.instructor_id)) });
+      const instructor = await coreCollection(db, "instructors").findOne({ _id: idMatch(String(record.instructor_id)) });
       const email = instructor?.email;
       if (!email) continue;
 
@@ -198,12 +199,12 @@ export async function deliverCheckinReminders(db, now = new Date()) {
   const timeZone = runtimeConfig().appTimeZone;
   const today = localDateKey(now, timeZone);
   const { start, end } = dateBoundsInTimeZone(today, timeZone);
-  const checkedIn = new Set((await db.collection("attendance").distinct("instructor_id", {
+  const checkedIn = new Set((await coreCollection(db, "attendance").distinct("instructor_id", {
     check_in_time: { $gte: start, $lt: end },
     deleting_at: { $exists: false },
     instructor_id: { $nin: [null, ""] },
   })).map(String));
-  const instructors = await db.collection("instructors")
+  const instructors = await coreCollection(db, "instructors")
     .find(
       { $or: [{ deleted_at: null }, { deleted_at: { $exists: false } }] },
       { projection: { name: 1, email: 1 } }
