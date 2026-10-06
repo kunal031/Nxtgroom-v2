@@ -36,7 +36,7 @@ import { getWorkerReadiness } from "./src/services/workerHealth.js";
 import { createDocument } from "./src/utils.js";
 import { telemetrySnapshot } from "./src/services/telemetry.js";
 import { coreCollection } from "./src/stores/coreStore.js";
-import { verifyDynamoTables } from "./src/stores/dynamoStartup.js";
+import { checkDynamoConnection, verifyDynamoTables } from "./src/stores/dynamoStartup.js";
 
 const config = runtimeConfig();
 
@@ -121,6 +121,16 @@ async function readinessStatus() {
       ready: false,
       status: "degraded",
       reasons: ["DATABASE_UNAVAILABLE"],
+      workers: [],
+      queues: [],
+    };
+  }
+  const dynamoReady = await checkDynamoConnection();
+  if (!dynamoReady) {
+    return {
+      ready: false,
+      status: "degraded",
+      reasons: ["DYNAMODB_UNAVAILABLE"],
       workers: [],
       queues: [],
     };

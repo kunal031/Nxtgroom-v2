@@ -1,4 +1,12 @@
-import { createDynamoClient, dynamoConfig, DYNAMO_STORES, usesDynamo } from "../config/dynamo.js";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  createDynamoClient,
+  dynamoConfig,
+  dynamoTableName,
+  DYNAMO_STORES,
+  getDynamoDocumentClient,
+  usesDynamo,
+} from "../config/dynamo.js";
 import { CORE_ROUTE_STORE, CORE_STORES, UNIQUE_KEYS_STORE } from "./coreStore.js";
 import { dynamoTableDefinition, ensureDynamoTables } from "./dynamoTables.js";
 
@@ -56,5 +64,33 @@ export async function verifyDynamoTables({ client, log = console.log } = {}) {
     return { checked: report.existing, skipped: false };
   } finally {
     if (owned) dynamo.destroy();
+  }
+}
+
+/**
+ * Whether DynamoDB is answering, for /health/ready.
+ *
+ * One cheap key lookup against one of the tables in use: enough to prove
+ * credentials, network and table are all still good, without reading data.
+ * While every store is on MongoDB there is nothing to check, so readiness
+ * does not depend on a database the deployment is not using yet.
+ */
+export async function checkDynamoConnection({ client } = {}) {
+  const stores = requiredDynamoStores();
+  if (!stores.length) return true;
+  try {
+    const dynamo = client || getDynamoDocumentClient();
+    const { keySchema } = dynamoTableDefinition(stores[0]);
+    // A key that need not exist: a miss still proves the table answered.
+    const key = Object.fromEntries(keySchema.map((part) => [part.AttributeName, "__healthcheck__"]));
+    await dynamo.send(new GetCommand({ TableName: dynamoTableName(stores[0]), Key: key }));
+    return true;
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "dynamo_health_failed",
+      error: String(error?.name || "Error"),
+      message: String(error?.message || "").slice(0, 200),
+    }));
+    return false;
   }
 }
