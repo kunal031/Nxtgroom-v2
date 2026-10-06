@@ -7,7 +7,10 @@ import { routedRead, routedWrite } from "./routing.js";
 
 const STORE = "evaluations";
 const KINDS = ["checkin", "checkout"];
-const BATCH_SESSIONS = 50;
+// BatchGetItem takes at most 100 keys, and each session asks for one key per
+// kind, so the session count is derived rather than fixed: adding a kind
+// narrows the batch instead of silently exceeding the limit.
+const MAX_BATCH_KEYS = 100;
 const MAX_BATCH_ATTEMPTS = 8;
 
 function table() {
@@ -50,9 +53,12 @@ export async function saveEvaluation(db, attendanceId, kind, evaluation, now = n
       { $set: evaluation, $setOnInsert: setOnInsert },
       { upsert: true }
     ),
-    dynamo: () => getDynamoDocumentClient().send(new UpdateCommand(
-      upsertCommandInput(table(), keyOf(attendanceId, kind), { set: evaluation, setOnInsert })
-    )),
+    dynamo: async () => {
+      // upsertCommandInput returns null when there is nothing to set, which
+      // UpdateCommand rejects; the other stores guard it the same way.
+      const input = upsertCommandInput(table(), keyOf(attendanceId, kind), { set: evaluation, setOnInsert });
+      if (input) await getDynamoDocumentClient().send(new UpdateCommand(input));
+    },
   });
 }
 
@@ -92,8 +98,9 @@ async function dynamoEvaluationsFor(attendanceIds) {
   const client = getDynamoDocumentClient();
   const ids = [...new Set(attendanceIds.map(String))];
   const found = [];
-  for (let start = 0; start < ids.length; start += BATCH_SESSIONS) {
-    let keys = ids.slice(start, start + BATCH_SESSIONS).flatMap((id) => KINDS.map((kind) => keyOf(id, kind)));
+  const sessionsPerBatch = Math.max(1, Math.floor(MAX_BATCH_KEYS / KINDS.length));
+  for (let start = 0; start < ids.length; start += sessionsPerBatch) {
+    let keys = ids.slice(start, start + sessionsPerBatch).flatMap((id) => KINDS.map((kind) => keyOf(id, kind)));
     for (let attempt = 1; keys.length; attempt += 1) {
       if (attempt > MAX_BATCH_ATTEMPTS) throw new Error("evaluations: DynamoDB kept returning unprocessed keys");
       const { Responses, UnprocessedKeys } = await client.send(new BatchGetCommand({
