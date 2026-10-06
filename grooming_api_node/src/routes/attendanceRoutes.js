@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import multer from "multer";
-import { withMongoTransaction } from "../config/db.js";
 import { runtimeConfig } from "../config/env.js";
 import { idMatch, instructorScope, isElevated, requireSuperAdmin } from "../middleware/auth.js";
 import { validateImageUpload } from "../imageValidation.js";
@@ -72,6 +71,7 @@ import {
 } from "../utils.js";
 import { checkoutSchema, parseCoordinates, validate } from "../validation.js";
 import { jobCollection } from "../stores/jobStore.js";
+import { coreCollection, coreTransaction } from "../stores/coreStore.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -194,7 +194,7 @@ function attendanceScope(currentUser) {
 }
 
 async function purgeAttendance(db, attendance) {
-  const marked = await db.collection("attendance").updateOne(
+  const marked = await coreCollection(db, "attendance").updateOne(
     { _id: attendance._id, deleting_at: { $exists: false } },
     {
       $set: { deleting_at: new Date(), updated_at: new Date() },
@@ -206,7 +206,7 @@ async function purgeAttendance(db, attendance) {
     }
   );
   if (!marked.matchedCount) {
-    const current = await db.collection("attendance").findOne({ _id: attendance._id });
+    const current = await coreCollection(db, "attendance").findOne({ _id: attendance._id });
     if (!current) return;
     return;
   }
@@ -225,7 +225,7 @@ async function purgeAttendance(db, attendance) {
     }
   }
   await deleteEvaluationsForAttendance(db, attendance._id);
-  await db.collection("attendance").deleteOne({ _id: attendance._id, deleting_at: { $exists: true } });
+  await coreCollection(db, "attendance").deleteOne({ _id: attendance._id, deleting_at: { $exists: true } });
 }
 
 async function compensateUploadedPhoto(db, key, reason) {
@@ -284,7 +284,7 @@ export function checkoutAvailability(attendance, now = new Date()) {
 
 async function attendanceIdForToday(db, instructorId) {
   try {
-    const record = await db.collection("attendance").findOne(
+    const record = await coreCollection(db, "attendance").findOne(
       attendanceOnLocalDay(instructorId),
       { projection: { _id: 1 } },
     );
@@ -329,23 +329,23 @@ export async function commitGuardedCheckIn(
     bodyRegions = null,
     now = new Date(),
   },
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const instructor = await db.collection("instructors").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeInstructorFilter(currentUser, instructorId),
       { session }
     );
     if (!instructor) return { outcome: "instructor_not_found" };
     if (!isValidEmail(instructor.email)) return { outcome: "invalid_email" };
 
-    const attendanceToday = await db.collection("attendance").findOne(
+    const attendanceToday = await coreCollection(db, "attendance").findOne(
       attendanceOnLocalDay(instructor._id, now),
       { session }
     );
     if (attendanceToday) return { outcome: "already_checked_in_today" };
 
-    const guard = await db.collection("instructors").updateOne(
+    const guard = await coreCollection(db, "instructors").updateOne(
       activeInstructorFilter(currentUser, instructorId),
       { $inc: { [INSTRUCTOR_ATTENDANCE_GUARD]: 1 } },
       { session }
@@ -394,7 +394,7 @@ export async function commitGuardedCheckIn(
       created_at: now,
       updated_at: now,
     });
-    await db.collection("attendance").insertOne(attendance, { session });
+    await coreCollection(db, "attendance").insertOne(attendance, { session });
     return { outcome: "created", attendance, evaluationPayload };
   });
 }
@@ -445,7 +445,7 @@ attendanceRouter.post(
 
     const match = await searchFaceByImage(normalizedImage.buffer);
     const instructor = match.ok
-      ? await db.collection("instructors").findOne(
+      ? await coreCollection(db, "instructors").findOne(
           activeInstructorFilter(req.currentUser, String(match.instructorId))
         )
       : null;
@@ -468,7 +468,7 @@ attendanceRouter.post(
     }
 
     const today = instructor
-      ? await db.collection("attendance").findOne(attendanceOnLocalDay(instructor._id, now))
+      ? await coreCollection(db, "attendance").findOne(attendanceOnLocalDay(instructor._id, now))
       : null;
     const action = decideKioskAction({
       matched: Boolean(instructor),
@@ -537,7 +537,7 @@ attendanceRouter.post(
     const settleUpload = async (attendanceId, kind) => {
       if (await uploading) return true;
       const field = kind === "checkout" ? "check_out_photo_key" : "check_in_photo_key";
-      await db.collection("attendance").updateOne(
+      await coreCollection(db, "attendance").updateOne(
         { _id: attendanceId },
         {
           $set: {
@@ -634,7 +634,7 @@ attendanceRouter.post(
     }
 
     const recipient = isValidEmail(instructor.email) ? instructor.email : null;
-    const result = await db.collection("attendance").findOneAndUpdate(
+    const result = await coreCollection(db, "attendance").findOneAndUpdate(
       { _id: today._id, check_out_time: null, ...attendanceScope(req.currentUser) },
       {
         $set: {
@@ -767,7 +767,7 @@ attendanceRouter.post(
     const settleUpload = async (uploading, attendanceId, kind) => {
       if (await uploading) return true;
       const field = kind === "checkout" ? "check_out_photo_key" : "check_in_photo_key";
-      await db.collection("attendance").updateOne(
+      await coreCollection(db, "attendance").updateOne(
         { _id: attendanceId },
         {
           $set: {
@@ -865,13 +865,13 @@ attendanceRouter.post(
       }
 
       const instructor = person.instructorId
-        ? await db.collection("instructors").findOne(
+        ? await coreCollection(db, "instructors").findOne(
             activeInstructorFilter(req.currentUser, person.instructorId)
           )
         : null;
 
       const today = instructor
-        ? await db.collection("attendance").findOne(attendanceOnLocalDay(instructor._id, now))
+        ? await coreCollection(db, "attendance").findOne(attendanceOnLocalDay(instructor._id, now))
         : null;
       const action = decideKioskAction({
         matched: Boolean(instructor),
@@ -939,7 +939,7 @@ attendanceRouter.post(
           let existing = null;
           if (committed.outcome === "already_checked_in_today") {
             try {
-              existing = await db.collection("attendance").findOne(
+              existing = await coreCollection(db, "attendance").findOne(
                 attendanceOnLocalDay(instructor._id, now),
                 { projection: { _id: 1, check_in_time: 1 } }
               );
@@ -994,7 +994,7 @@ attendanceRouter.post(
 
       const { key, uploading } = beginUpload(person, instructor._id, "checkout");
       const recipient = isValidEmail(instructor.email) ? instructor.email : null;
-      const result = await db.collection("attendance").findOneAndUpdate(
+      const result = await coreCollection(db, "attendance").findOneAndUpdate(
         { _id: today._id, check_out_time: null, ...attendanceScope(req.currentUser) },
         {
           $set: {
@@ -1174,7 +1174,7 @@ attendanceRouter.post(
       });
     }
 
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeInstructorFilter(req.currentUser, instructorId)
     );
     if (!instructor) {
@@ -1194,7 +1194,7 @@ attendanceRouter.post(
       });
     }
 
-    const activeRecord = await db.collection("attendance").findOne(
+    const activeRecord = await coreCollection(db, "attendance").findOne(
       attendanceOnLocalDay(instructor._id)
     );
     if (activeRecord) {
@@ -1376,7 +1376,7 @@ attendanceRouter.post(
       return res.status(422).json({ detail: "A valid instructor_id is required" });
     }
 
-    const candidate = await db.collection("attendance").findOne(
+    const candidate = await coreCollection(db, "attendance").findOne(
       {
         ...attendanceOnLocalDay(instructorId, checkOutTime),
         ...scope,
@@ -1405,7 +1405,7 @@ attendanceRouter.post(
       });
     }
 
-    const instructor = await db.collection("instructors").findOne({
+    const instructor = await coreCollection(db, "instructors").findOne({
       _id: idMatch(String(candidate.instructor_id)),
     });
     const recipient = isValidEmail(instructor?.email) ? instructor.email : null;
@@ -1471,7 +1471,7 @@ attendanceRouter.post(
       } : {}),
       ...(recipient && !req.file ? { _private_checkout_outbox: checkoutPayload } : {}),
     };
-    const result = await db.collection("attendance").findOneAndUpdate(
+    const result = await coreCollection(db, "attendance").findOneAndUpdate(
       {
         _id: candidate._id,
         check_out_time: null,
@@ -1599,7 +1599,7 @@ attendanceRouter.get(
       }
       throw error;
     }
-    const attendances = await db.collection("attendance")
+    const attendances = await coreCollection(db, "attendance")
       .find({
         ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
         ...(updatedSince ? { updated_at: { $gt: updatedSince } } : {}),
@@ -1619,7 +1619,7 @@ attendanceRouter.get(
 
     const instructorIds = [...new Set(attendances.map((row) => String(row.instructor_id)))];
     const legacyInstructors = instructorIds.length
-      ? await db.collection("instructors").find(
+      ? await coreCollection(db, "instructors").find(
           { _id: { $in: lookupIdVariants(instructorIds) } },
           { projection: { name: 1, role: 1, instructor_role: 1, college_id: 1, report_token: 1 } }
         ).toArray()
@@ -1633,7 +1633,7 @@ attendanceRouter.get(
       .filter(Boolean)
       .map(String))];
     const colleges = collegeIds.length
-      ? await db.collection("colleges").find({
+      ? await coreCollection(db, "colleges").find({
           _id: { $in: lookupIdVariants(collegeIds) },
         }).toArray()
       : [];
@@ -1663,14 +1663,14 @@ attendanceRouter.get(
   "/:attendanceId",
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const attendance = await db.collection("attendance").findOne({
+    const attendance = await coreCollection(db, "attendance").findOne({
       _id: idMatch(req.params.attendanceId),
       ...attendanceScope(req.currentUser),
       status: { $ne: "unidentified" },
     });
     if (!attendance) return res.status(404).json({ detail: "Attendance record not found" });
 
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       { _id: idMatch(String(attendance.instructor_id)) },
       { projection: { name: 1, role: 1, instructor_role: 1, report_token: 1 } }
     );
@@ -1695,7 +1695,7 @@ attendanceRouter.post(
 
     const db = req.app.locals.db;
     const scope = attendanceScope(req.currentUser);
-    const attendance = await db.collection("attendance").findOne({
+    const attendance = await coreCollection(db, "attendance").findOne({
       _id: idMatch(req.params.attendanceId),
       check_out_time: { $ne: null },
       deleting_at: { $exists: false },
@@ -1741,7 +1741,7 @@ attendanceRouter.post(
       });
     }
 
-    const claimed = await db.collection("attendance").updateOne(
+    const claimed = await coreCollection(db, "attendance").updateOne(
       {
         _id: attendance._id,
         deleting_at: { $exists: false },
@@ -1767,7 +1767,7 @@ attendanceRouter.post(
       return res.status(409).json({ detail: "A checkout photo was already attached" });
     }
 
-    const instructor = await db.collection("instructors").findOne({
+    const instructor = await coreCollection(db, "instructors").findOne({
       _id: idMatch(String(attendance.instructor_id)),
     });
     const recipient = isValidEmail(instructor?.email) ? instructor.email : null;
@@ -1797,7 +1797,7 @@ attendanceRouter.post(
           remarks: evaluation.ai_summary || "",
           imageQuality: evaluation.image_quality || null,
         };
-        await db.collection("attendance").updateOne(
+        await coreCollection(db, "attendance").updateOne(
           { _id: attendance._id, deleting_at: { $exists: false } },
           { $set: { checkout_email_status: "outbox_pending", updated_at: new Date() } }
         );
@@ -1819,7 +1819,7 @@ attendanceRouter.post(
       });
     } catch (error) {
       const code = String(error?.code || error?.name || "EVALUATION_ERROR").toUpperCase();
-      await db.collection("attendance").updateOne(
+      await coreCollection(db, "attendance").updateOne(
         { _id: attendance._id },
         {
           $set: {
@@ -1839,7 +1839,7 @@ attendanceRouter.get(
   "/:attendanceId/evaluation",
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const attendance = await db.collection("attendance").findOne({
+    const attendance = await coreCollection(db, "attendance").findOne({
       _id: idMatch(req.params.attendanceId),
       ...attendanceScope(req.currentUser),
     });
@@ -1857,7 +1857,7 @@ attendanceRouter.get(
 attendanceRouter.get(
   "/:attendanceId/status",
   asyncRoute(async (req, res) => {
-    const attendance = await req.app.locals.db.collection("attendance").findOne(
+    const attendance = await coreCollection(req.app.locals.db, "attendance").findOne(
       { _id: idMatch(req.params.attendanceId), ...attendanceScope(req.currentUser) },
       {
         projection: {
@@ -1916,7 +1916,7 @@ attendanceRouter.post(
         detail: "Re-analysis is turned off for this workspace. An administrator can enable it in Settings.",
       });
     }
-    const attendance = await db.collection("attendance").findOne({
+    const attendance = await coreCollection(db, "attendance").findOne({
       _id: idMatch(req.params.attendanceId),
       ...attendanceScope(req.currentUser),
     });
@@ -1932,7 +1932,7 @@ attendanceRouter.post(
       });
     }
 
-    const instructor = await db.collection("instructors").findOne({
+    const instructor = await coreCollection(db, "instructors").findOne({
       _id: idMatch(String(attendance.instructor_id)),
     });
 
@@ -1943,7 +1943,7 @@ attendanceRouter.post(
         : `${attendance._id}:evaluation`,
     });
     await deleteEvaluation(db, String(attendance._id), kind);
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendance._id },
       {
         $set: kind === "checkout"
@@ -1985,7 +1985,7 @@ attendanceRouter.post(
         });
       } catch (error) {
         const code = String(error?.code || error?.name || "EVALUATION_ERROR").toUpperCase();
-        await db.collection("attendance").updateOne(
+        await coreCollection(db, "attendance").updateOne(
           { _id: attendance._id },
           {
             $set: {
@@ -2026,7 +2026,7 @@ attendanceRouter.get(
   "/:attendanceId/photo/:kind",
   asyncRoute(async (req, res) => {
     const kind = req.params.kind === "checkout" ? "checkout" : "checkin";
-    const attendance = await req.app.locals.db.collection("attendance").findOne(
+    const attendance = await coreCollection(req.app.locals.db, "attendance").findOne(
       { _id: idMatch(req.params.attendanceId), ...attendanceScope(req.currentUser) },
       { projection: { check_in_photo_key: 1, check_out_photo_key: 1 } }
     );
@@ -2062,7 +2062,7 @@ attendanceRouter.post(
     }
 
     const db = req.app.locals.db;
-    const records = await db.collection("attendance").find({
+    const records = await coreCollection(db, "attendance").find({
       $or: attendanceIds.map((attendanceId) => ({ _id: idMatch(attendanceId) })),
     }).toArray();
     const recordsById = new Map(records.map((record) => [String(record._id), record]));
@@ -2109,7 +2109,7 @@ attendanceRouter.delete(
       });
     }
 
-    const attendance = await db.collection("attendance").findOne({
+    const attendance = await coreCollection(db, "attendance").findOne({
       _id: idMatch(req.params.attendanceId),
       ...attendanceScope(req.currentUser),
     });
@@ -2138,7 +2138,7 @@ attendanceRouter.delete(
       });
     }
 
-    const attendance = await db.collection("attendance").findOne({
+    const attendance = await coreCollection(db, "attendance").findOne({
       _id: idMatch(req.params.attendanceId),
       ...attendanceScope(req.currentUser),
     });
@@ -2147,7 +2147,7 @@ attendanceRouter.delete(
       return res.status(409).json({ detail: "This record has no check-out to delete" });
     }
 
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendance._id, checkout_deleting_at: { $exists: false } },
       {
         $set: { checkout_deleting_at: new Date(), updated_at: new Date() },
@@ -2181,7 +2181,7 @@ attendanceRouter.delete(
       _id: `${attendance._id}:evaluation:checkout`,
     });
     await deleteEvaluation(db, String(attendance._id), "checkout");
-    await db.collection("attendance").updateOne(
+    await coreCollection(db, "attendance").updateOne(
       { _id: attendance._id },
       {
         $set: { check_out_time: null, updated_at: new Date() },

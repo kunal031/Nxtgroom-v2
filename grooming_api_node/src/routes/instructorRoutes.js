@@ -1,6 +1,5 @@
 import { Router } from "express";
 import multer from "multer";
-import { withMongoTransaction } from "../config/db.js";
 import { idMatch, instructorScope, isElevated, requireSuperAdmin, ROLES } from "../middleware/auth.js";
 import { asyncRoute, createDocument, dateBoundsInTimeZone, parsePagination, serializeDocument } from "../utils.js";
 import { runtimeConfig } from "../config/env.js";
@@ -30,6 +29,7 @@ import {
 import { RemoteFetchError } from "../services/remoteFetch.js";
 import { getConfigSettings } from "../services/configSettings.js";
 import { randomUUID } from "node:crypto";
+import { coreCollection, coreTransaction } from "../stores/coreStore.js";
 
 export const instructorRouter = Router();
 
@@ -97,7 +97,7 @@ export async function loadRecentInstructorFeedbacks(db, instructorIds) {
   const normalizedIdField = "_private_paging_instructor_id";
   const normalizedDateField = "_private_paging_feedback_date";
   const rankField = "_private_paging_feedback_rank";
-  return db.collection("attendance").aggregate([
+  return coreCollection(db, "attendance").aggregate([
     { $match: { instructor_id: { $in: lookupIdVariants(instructorIds) } } },
     {
       $project: {
@@ -146,7 +146,7 @@ export function generateInstructorUserId() {
 async function newInstructorUserId(db, session) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const candidate = generateInstructorUserId();
-    if (!await db.collection("instructors").findOne({ instructor_user_id: candidate }, { session })) return candidate;
+    if (!await coreCollection(db, "instructors").findOne({ instructor_user_id: candidate }, { session })) return candidate;
   }
   throw new Error("Could not generate a unique instructor user ID");
 }
@@ -154,15 +154,15 @@ async function newInstructorUserId(db, session) {
 export async function createInstructorGuarded(
   db,
   input,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const college = await db.collection("colleges").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(input.college_id) }),
       { session }
     );
     if (!college) return { outcome: "college_not_found" };
-    if (input.employee_id && await db.collection("instructors").findOne(
+    if (input.employee_id && await coreCollection(db, "instructors").findOne(
       { employee_id: input.employee_id },
       { session }
     )) {
@@ -170,13 +170,13 @@ export async function createInstructorGuarded(
     }
     let userId = input.instructor_user_id;
     if (userId) {
-      if (await db.collection("instructors").findOne({ instructor_user_id: userId }, { session })) {
+      if (await coreCollection(db, "instructors").findOne({ instructor_user_id: userId }, { session })) {
         return { outcome: "duplicate_user_id" };
       }
     } else {
       userId = await newInstructorUserId(db, session);
     }
-    const collegeGuard = await db.collection("colleges").updateOne(
+    const collegeGuard = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $inc: { [COLLEGE_ASSIGNMENT_GUARD]: 1 } },
       { session }
@@ -192,7 +192,7 @@ export async function createInstructorGuarded(
       updated_at: now,
       deleted_at: null,
     });
-    await db.collection("instructors").insertOne(instructor, { session });
+    await coreCollection(db, "instructors").insertOne(instructor, { session });
     return { outcome: "created", instructor };
   });
 }
@@ -201,11 +201,11 @@ export async function updateInstructorGuarded(
   db,
   instructorId,
   input,
-  runTransaction = withMongoTransaction,
+  runTransaction = null,
   { allowMoveWhileCheckedIn = false } = {}
 ) {
-  return runTransaction(async (session) => {
-    const existing = await db.collection("instructors").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const existing = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(instructorId) }),
       { session }
     );
@@ -213,20 +213,20 @@ export async function updateInstructorGuarded(
 
     const movingCollege = String(existing.college_id) !== String(input.college_id);
     if (movingCollege && !allowMoveWhileCheckedIn) {
-      const activeAttendance = await db.collection("attendance").findOne(
+      const activeAttendance = await coreCollection(db, "attendance").findOne(
         openCheckInTodayFilter(existing._id),
         { session }
       );
       if (activeAttendance) return { outcome: "active_attendance" };
     }
 
-    const college = await db.collection("colleges").findOne(
+    const college = await coreCollection(db, "colleges").findOne(
       activeFilter({ _id: idMatch(input.college_id) }),
       { session }
     );
     if (!college) return { outcome: "college_not_found" };
 
-    const duplicate = input.employee_id && await db.collection("instructors").findOne(
+    const duplicate = input.employee_id && await coreCollection(db, "instructors").findOne(
       {
         employee_id: input.employee_id,
         _id: { $ne: existing._id },
@@ -239,7 +239,7 @@ export async function updateInstructorGuarded(
     const userIdUpdate = {};
     if (requestedUserId && requestedUserId !== existing.instructor_user_id) {
       if (existing.instructor_user_id) return { outcome: "user_id_locked" };
-      const taken = await db.collection("instructors").findOne(
+      const taken = await coreCollection(db, "instructors").findOne(
         { instructor_user_id: requestedUserId, _id: { $ne: existing._id } },
         { session }
       );
@@ -247,14 +247,14 @@ export async function updateInstructorGuarded(
       userIdUpdate.instructor_user_id = requestedUserId;
     }
 
-    const collegeGuard = await db.collection("colleges").updateOne(
+    const collegeGuard = await coreCollection(db, "colleges").updateOne(
       activeFilter({ _id: college._id }),
       { $inc: { [COLLEGE_ASSIGNMENT_GUARD]: 1 } },
       { session }
     );
     if (!collegeGuard.matchedCount) return { outcome: "college_not_found" };
 
-    const result = await db.collection("instructors").updateOne(
+    const result = await coreCollection(db, "instructors").updateOne(
       activeFilter({ _id: existing._id }),
       { $set: { ...fields, ...userIdUpdate, college_id: String(college._id), updated_at: new Date() } },
       { session }
@@ -268,23 +268,23 @@ export async function updateInstructorGuarded(
 export async function deleteInstructorGuarded(
   db,
   instructorId,
-  runTransaction = withMongoTransaction
+  runTransaction = null
 ) {
-  return runTransaction(async (session) => {
-    const existing = await db.collection("instructors").findOne(
+  return (runTransaction || coreTransaction(db))(async (session) => {
+    const existing = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(instructorId) }),
       { session }
     );
     if (!existing) return { outcome: "not_found" };
 
-    const activeAttendance = await db.collection("attendance").findOne(
+    const activeAttendance = await coreCollection(db, "attendance").findOne(
       openCheckInTodayFilter(existing._id),
       { session }
     );
     if (activeAttendance) return { outcome: "active_attendance" };
 
     const now = new Date();
-    const result = await db.collection("instructors").updateOne(
+    const result = await coreCollection(db, "instructors").updateOne(
       activeFilter({ _id: existing._id }),
       { $set: { deleted_at: now, updated_at: now } },
       { session }
@@ -371,7 +371,7 @@ instructorRouter.post(
         database,
         instructorId,
         fields,
-        withMongoTransaction,
+        null,
         { allowMoveWhileCheckedIn },
       ),
     });
@@ -407,7 +407,7 @@ instructorRouter.get(
       }
       throw error;
     }
-    const instructors = await db.collection("instructors")
+    const instructors = await coreCollection(db, "instructors")
       .find(activeFilter(instructorScope(req.currentUser)))
       .sort({ name: 1, _id: 1 })
       .skip(pagination.offset)
@@ -483,7 +483,7 @@ instructorRouter.put(
         db,
         req.params.instructorId,
         req.validatedBody,
-        withMongoTransaction,
+        null,
         { allowMoveWhileCheckedIn }
       );
     } catch (error) {
@@ -521,7 +521,7 @@ instructorRouter.patch(
   validate(instructorGenderSchema),
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const result = await db.collection("instructors").updateOne(
+    const result = await coreCollection(db, "instructors").updateOne(
       activeFilter({
         _id: idMatch(req.params.instructorId),
         ...instructorScope(req.currentUser),
@@ -553,7 +553,7 @@ instructorRouter.post(
     const validation = validateImageUpload(req.file);
     if (!validation.valid) return res.status(400).json({ detail: validation.detail });
 
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(req.params.instructorId) })
     );
     if (!instructor) return res.status(404).json({ detail: "Instructor not found" });
@@ -592,7 +592,7 @@ instructorRouter.get(
   requireSuperAdmin,
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(req.params.instructorId) }),
       { projection: { face_ids: 1, reference_photo_key: 1, face_indexed_at: 1 } }
     );
@@ -615,7 +615,7 @@ instructorRouter.delete(
   requireSuperAdmin,
   asyncRoute(async (req, res) => {
     const db = req.app.locals.db;
-    const instructor = await db.collection("instructors").findOne(
+    const instructor = await coreCollection(db, "instructors").findOne(
       activeFilter({ _id: idMatch(req.params.instructorId) })
     );
     if (!instructor) return res.status(404).json({ detail: "Instructor not found" });
@@ -631,7 +631,7 @@ instructorRouter.delete(
     }
 
     const now = new Date();
-    await db.collection("instructors").updateOne(
+    await coreCollection(db, "instructors").updateOne(
       activeFilter({ _id: instructor._id }),
       {
         $set: { face_ids: [], updated_at: now },

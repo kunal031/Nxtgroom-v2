@@ -40,6 +40,7 @@ import {
   getNotificationSettings,
   shouldSendWeeklyReport,
 } from "../services/notificationSettings.js";
+import { coreCollection } from "../stores/coreStore.js";
 
 export const reportRouter = Router();
 
@@ -182,7 +183,7 @@ async function loadInstructorWeek(db, instructor, startKey) {
   const to = new Date(`${dates[dates.length - 1]}T23:59:59.999Z`);
   to.setUTCDate(to.getUTCDate() + 1);
 
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find({
       instructor_id: String(instructor._id),
       check_in_time: { $gte: from, $lte: to },
@@ -203,7 +204,7 @@ async function loadInstructorMonth(db, instructor, monthKey) {
   const zone = runtimeConfig().appTimeZone;
   const from = dateBoundsInTimeZone(`${monthKey}-01`, zone).start;
   const to = dateBoundsInTimeZone(`${nextKey}-01`, zone).start;
-  const records = await db.collection("attendance")
+  const records = await coreCollection(db, "attendance")
     .find({ instructor_id: String(instructor._id), check_in_time: { $gte: from, $lt: to } })
     .sort({ check_in_time: 1 })
     .toArray();
@@ -275,7 +276,7 @@ reportRouter.get(
     from.setUTCDate(from.getUTCDate() - 1);
     const to = new Date(`${date}T23:59:59.999Z`);
     to.setUTCDate(to.getUTCDate() + 1);
-    const candidates = await db.collection("attendance")
+    const candidates = await coreCollection(db, "attendance")
       .find({ instructor_id: String(instructor._id), check_in_time: { $gte: from, $lte: to } })
       .sort({ check_in_time: 1 })
       .toArray();
@@ -350,7 +351,7 @@ reportRouter.get(
     from.setUTCDate(from.getUTCDate() - 1);
     const to = new Date(`${date}T23:59:59.999Z`);
     to.setUTCDate(to.getUTCDate() + 1);
-    const candidates = await db.collection("attendance")
+    const candidates = await coreCollection(db, "attendance")
       .find({ instructor_id: String(instructor._id), check_in_time: { $gte: from, $lte: to } })
       .sort({ check_in_time: 1 })
       .toArray();
@@ -388,7 +389,7 @@ export async function deliverWeeklyReports(db, startKey) {
   const to = new Date(`${dates[dates.length - 1]}T23:59:59.999Z`);
   to.setUTCDate(to.getUTCDate() + 1);
 
-  const instructorIds = await db.collection("attendance").distinct("instructor_id", {
+  const instructorIds = await coreCollection(db, "attendance").distinct("instructor_id", {
     check_in_time: { $gte: from, $lte: to },
   });
 
@@ -399,7 +400,7 @@ export async function deliverWeeklyReports(db, startKey) {
   const failures = [];
   for (const instructorId of instructorIds) {
     try {
-      const instructor = await db.collection("instructors").findOne({ _id: idMatch(String(instructorId)) });
+      const instructor = await coreCollection(db, "instructors").findOne({ _id: idMatch(String(instructorId)) });
       if (!instructor?.email) {
         skipped += 1;
         continue;
@@ -524,7 +525,7 @@ reportRouter.post(
     const dryRun = req.query.dry === "1" || req.query.dry === "true";
 
     if (dryRun) {
-      const would = await db.collection("attendance").countDocuments(openCheckInFilter(day));
+      const would = await coreCollection(db, "attendance").countDocuments(openCheckInFilter(day));
       return res.json({ dry_run: true, day, would_mark: would });
     }
 
